@@ -37,6 +37,15 @@ python agent_demo\run_demo.py
 
 Open <http://localhost:8080/docs> for the API docs.
 
+## Run tests
+
+Once Python is installed and the venv is active:
+
+```powershell
+pip install -r requirements.txt
+pytest -q
+```
+
 ## Repo layout
 
 - `control_plane/`: FastAPI app and rule engine
