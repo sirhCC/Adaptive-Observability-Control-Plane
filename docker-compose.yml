@@ -1,0 +1,14 @@
+version: "3.9"
+services:
+  control-plane:
+    build: ./control_plane
+    ports:
+      - "8080:8080"
+  agent-demo:
+    build: ./agent_demo
+    depends_on:
+      - control-plane
+    environment:
+      - CP_URL=http://control-plane:8080
+      - SERVICE=checkout
+      - ENV=prod
