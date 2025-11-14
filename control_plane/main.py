@@ -637,6 +637,259 @@ async def import_policy(
     }
 
 
+@v1_router.get("/policy/templates")
+@limiter.limit("50/minute")
+async def get_policy_templates(request: Request):
+    """Get policy templates/presets for common scenarios.
+    
+    Returns pre-configured policy templates that can be used as starting points
+    for different observability strategies.
+    """
+    templates = {
+        "production-safe": {
+            "name": "Production Safe",
+            "description": "Conservative policy for production environments with error-based elevation",
+            "policy": {
+                "id": "production-safe",
+                "description": "Conservative production policy",
+                "rules": [
+                    {
+                        "id": "prod-baseline",
+                        "description": "Baseline for production - minimal overhead",
+                        "environment": "prod",
+                        "priority": 0,
+                        "conditions": [{"kind": "always", "op": "always"}],
+                        "actions": {
+                            "log_level": "INFO",
+                            "trace_sample_rate": 0.01,
+                            "metric_period_s": 60
+                        }
+                    },
+                    {
+                        "id": "prod-high-errors",
+                        "description": "Elevate on high error rates in production",
+                        "environment": "prod",
+                        "priority": 10,
+                        "conditions": [
+                            {"kind": "error_rate", "op": ">", "key": "rate", "value": 0.05, "window_s": 300}
+                        ],
+                        "actions": {
+                            "log_level": "WARN",
+                            "trace_sample_rate": 0.10,
+                            "metric_period_s": 30
+                        }
+                    },
+                    {
+                        "id": "prod-critical-errors",
+                        "description": "Maximum observability on critical errors",
+                        "environment": "prod",
+                        "priority": 20,
+                        "conditions": [
+                            {"kind": "error_rate", "op": ">", "key": "rate", "value": 0.10, "window_s": 60}
+                        ],
+                        "actions": {
+                            "log_level": "DEBUG",
+                            "trace_sample_rate": 0.50,
+                            "metric_period_s": 15
+                        }
+                    }
+                ]
+            }
+        },
+        "development": {
+            "name": "Development",
+            "description": "Verbose policy for development environments with high sampling",
+            "policy": {
+                "id": "development",
+                "description": "Development environment policy with verbose logging",
+                "rules": [
+                    {
+                        "id": "dev-baseline",
+                        "description": "Verbose baseline for development",
+                        "environment": "dev",
+                        "priority": 0,
+                        "conditions": [{"kind": "always", "op": "always"}],
+                        "actions": {
+                            "log_level": "DEBUG",
+                            "trace_sample_rate": 1.0,
+                            "metric_period_s": 30
+                        }
+                    }
+                ]
+            }
+        },
+        "performance-focused": {
+            "name": "Performance Focused",
+            "description": "Policy that elevates observability based on latency thresholds",
+            "policy": {
+                "id": "performance-focused",
+                "description": "Latency-based adaptive policy",
+                "rules": [
+                    {
+                        "id": "baseline",
+                        "description": "Default baseline",
+                        "priority": 0,
+                        "conditions": [{"kind": "always", "op": "always"}],
+                        "actions": {
+                            "log_level": "INFO",
+                            "trace_sample_rate": 0.05,
+                            "metric_period_s": 60
+                        }
+                    },
+                    {
+                        "id": "elevated-latency",
+                        "description": "Increase sampling on slow requests",
+                        "priority": 10,
+                        "conditions": [
+                            {"kind": "metric", "op": ">", "key": "latency_p95_ms", "value": 500, "window_s": 300}
+                        ],
+                        "actions": {
+                            "log_level": "WARN",
+                            "trace_sample_rate": 0.25,
+                            "metric_period_s": 30
+                        }
+                    },
+                    {
+                        "id": "critical-latency",
+                        "description": "Maximum observability on very slow requests",
+                        "priority": 20,
+                        "conditions": [
+                            {"kind": "metric", "op": ">", "key": "latency_p99_ms", "value": 2000, "window_s": 120}
+                        ],
+                        "actions": {
+                            "log_level": "DEBUG",
+                            "trace_sample_rate": 0.75,
+                            "metric_period_s": 15
+                        }
+                    }
+                ]
+            }
+        },
+        "cost-optimized": {
+            "name": "Cost Optimized",
+            "description": "Minimal observability overhead, only elevates on critical issues",
+            "policy": {
+                "id": "cost-optimized",
+                "description": "Minimal overhead policy for cost savings",
+                "rules": [
+                    {
+                        "id": "minimal-baseline",
+                        "description": "Minimal baseline sampling",
+                        "priority": 0,
+                        "conditions": [{"kind": "always", "op": "always"}],
+                        "actions": {
+                            "log_level": "WARN",
+                            "trace_sample_rate": 0.001,
+                            "metric_period_s": 120
+                        }
+                    },
+                    {
+                        "id": "critical-only",
+                        "description": "Only elevate on critical errors",
+                        "priority": 10,
+                        "conditions": [
+                            {"kind": "error_rate", "op": ">", "key": "rate", "value": 0.20, "window_s": 60}
+                        ],
+                        "actions": {
+                            "log_level": "ERROR",
+                            "trace_sample_rate": 0.10,
+                            "metric_period_s": 30
+                        }
+                    }
+                ]
+            }
+        },
+        "balanced": {
+            "name": "Balanced",
+            "description": "Balanced policy with error and latency triggers",
+            "policy": {
+                "id": "balanced",
+                "description": "Balanced adaptive policy for most use cases",
+                "rules": [
+                    {
+                        "id": "baseline",
+                        "description": "Balanced baseline",
+                        "priority": 0,
+                        "conditions": [{"kind": "always", "op": "always"}],
+                        "actions": {
+                            "log_level": "INFO",
+                            "trace_sample_rate": 0.10,
+                            "metric_period_s": 60
+                        }
+                    },
+                    {
+                        "id": "errors-detected",
+                        "description": "Elevate on error rate increase",
+                        "priority": 10,
+                        "conditions": [
+                            {"kind": "error_rate", "op": ">", "key": "rate", "value": 0.02, "window_s": 120}
+                        ],
+                        "actions": {
+                            "log_level": "DEBUG",
+                            "trace_sample_rate": 0.30,
+                            "metric_period_s": 30
+                        }
+                    },
+                    {
+                        "id": "slow-requests",
+                        "description": "Elevate on latency issues",
+                        "priority": 15,
+                        "conditions": [
+                            {"kind": "metric", "op": ">", "key": "latency_p95_ms", "value": 400, "window_s": 180}
+                        ],
+                        "actions": {
+                            "log_level": "DEBUG",
+                            "trace_sample_rate": 0.30,
+                            "metric_period_s": 30
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    
+    return {
+        "templates": templates,
+        "count": len(templates),
+        "usage": "Use GET /v1/policy/templates/{template_name} to get a specific template"
+    }
+
+
+@v1_router.get("/policy/templates/{template_name}")
+@limiter.limit("50/minute")
+async def get_policy_template(request: Request, template_name: str):
+    """Get a specific policy template by name.
+    
+    Args:
+        template_name: One of: production-safe, development, performance-focused, 
+                       cost-optimized, balanced
+    
+    Returns:
+        Policy template configuration ready to import
+    """
+    # Get all templates
+    templates_response = await get_policy_templates(request)
+    templates = templates_response["templates"]
+    
+    if template_name not in templates:
+        available = ", ".join(templates.keys())
+        raise HTTPException(
+            status_code=404,
+            detail=f"Template '{template_name}' not found. Available templates: {available}"
+        )
+    
+    template = templates[template_name]
+    
+    return {
+        "template": template,
+        "export_ready": True,
+        "usage": {
+            "curl_json": f"curl http://localhost:8080/v1/policy/templates/{template_name} | jq '.template.policy' | curl -X POST http://localhost:8080/v1/policy/import -H 'X-API-Key: YOUR_KEY' -d @-",
+            "description": "Pipe this template directly to the import endpoint or download and customize"
+        }
+    }
+
+
 @v1_router.post("/policy/validate")
 @limiter.limit("20/minute")
 async def validate_policy(request: Request, req: UpsertPolicy):
