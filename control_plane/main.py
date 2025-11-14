@@ -270,6 +270,23 @@ op_map = {
 }
 
 
+def _eval_condition(cond: Condition, signal: Signal, aggs: dict) -> bool:
+    """Evaluate a single condition against a signal and aggregates."""
+    if cond.kind == "always" or cond.op == "always":
+        return True
+    
+    if cond.kind == "error_rate":
+        v = aggs.get("error_rate", 0.0)
+        threshold = float(cond.value) if cond.value is not None else 0.0
+        return op_map[cond.op](v, threshold)
+    elif cond.kind == "metric":
+        v = aggs.get(cond.key or "", 0.0)
+        threshold = float(cond.value) if cond.value is not None else 0.0
+        return op_map[cond.op](v, threshold)
+    
+    return False
+
+
 # --- Rule evaluation
 
 def evaluate(service: str, env: str) -> EffectiveConfig:
@@ -468,15 +485,24 @@ async def validate_policy(request: Request, req: UpsertPolicy):
         ]
     }
 
-
-@v1_router.post("/policy", response_model=Policy)
+@v1_router.post("/policy")
 @limiter.limit("10/minute")  # Strict limit on policy updates
 async def set_policy(
     request: Request,
     req: UpsertPolicy,
     admin: str = Depends(require_admin_key),
+    dry_run: bool = False,
 ):
-    """Update the policy configuration. Requires admin API key."""
+    """Update the policy configuration. Requires admin API key.
+    
+    Args:
+        dry_run: If True, validate the policy but don't apply it.
+            Returns validation results without applying changes.
+            
+    Returns:
+        If dry_run is False: Policy object that was applied
+        If dry_run is True: Dict with validation results and policy preview
+    """
     from control_plane.rule_validator import validate_policy_rules
     
     global POLICY
@@ -509,6 +535,22 @@ async def set_policy(
         logger.warning(f"Policy update has {len(warnings)} warnings: " + 
                       "; ".join([c.message for c in warnings]))
     
+    # If dry_run, return validation results without applying
+    if dry_run:
+        logger.info(f"Dry-run validation for policy '{req.policy.id}' successful")
+        return {
+            "dry_run": True,
+            "valid": True,
+            "policy": req.policy,
+            "validation": {
+                "conflicts": len(validation_result["conflicts"]),
+                "warnings": len(warnings),
+                "details": validation_result
+            },
+            "message": "Policy is valid and can be applied"
+        }
+    
+    # Apply the policy
     POLICY = req.policy
     prom_metrics.record_policy_update(req.policy.id)
     logger.info(f"Policy '{req.policy.id}' updated with {len(req.policy.rules)} rules")
@@ -537,6 +579,116 @@ class SignalIn(BaseModel):
             if len(key) > 128 or len(value) > 1024:
                 raise ValueError("Attribute keys must be ≤128 chars, values ≤1024 chars")
         return v
+
+
+class SimulateRequest(BaseModel):
+    """Request to simulate policy evaluation with test signals."""
+    policy: Policy
+    test_signals: List[SignalIn] = Field(
+        ..., 
+        min_length=1, 
+        max_length=100,
+        description="Test signals to evaluate (1-100)"
+    )
+
+
+@v1_router.post("/policy/simulate")
+@limiter.limit("20/minute")
+async def simulate_policy(request: Request, req: SimulateRequest):
+    """Simulate policy evaluation with test signals.
+    
+    Shows which rules would match for each test signal without applying the policy.
+    Useful for testing policy changes before deployment.
+    """
+    results = []
+    
+    for idx, sig_in in enumerate(req.test_signals):
+        # Convert SignalIn to Signal
+        test_signal = Signal(
+            service=sig_in.service,
+            environment=sig_in.environment,
+            ts=_now(),
+            latency_ms=sig_in.latency_ms,
+            error=sig_in.error,
+            attrs=sig_in.attrs,
+        )
+        
+        # Create mock buffer with just this signal for aggregates
+        mock_buffer = [test_signal]
+        agg = _calc_aggregates(mock_buffer)
+        
+        # Evaluate which rules would match
+        matched_rules = []
+        effective_config = EffectiveConfig(
+            service=test_signal.service,
+            environment=test_signal.environment
+        )
+        
+        for rule in req.policy.rules:
+            if not rule.enabled:
+                continue
+                
+            # Check if rule scope matches
+            if rule.service and rule.service != "*" and rule.service != test_signal.service:
+                continue
+            if rule.environment and rule.environment != "*" and rule.environment != test_signal.environment:
+                continue
+            
+            # Evaluate conditions
+            match = True
+            condition_results = []
+            
+            for cond in rule.conditions:
+                cond_match = _eval_condition(cond, test_signal, agg)
+                condition_results.append({
+                    "kind": cond.kind,
+                    "op": cond.op,
+                    "matched": cond_match,
+                    "key": cond.key,
+                    "value": cond.value
+                })
+                if not cond_match:
+                    match = False
+                    break
+            
+            if match:
+                matched_rules.append({
+                    "rule_id": rule.id,
+                    "priority": rule.priority,
+                    "description": rule.description,
+                    "conditions": condition_results,
+                    "actions": rule.actions.model_dump(exclude_none=True)
+                })
+                
+                # Apply actions to effective config
+                if rule.actions.log_level:
+                    effective_config.log_level = rule.actions.log_level
+                if rule.actions.trace_sample_rate is not None:
+                    effective_config.trace_sample_rate = rule.actions.trace_sample_rate
+                if rule.actions.metric_period_s is not None:
+                    effective_config.metric_period_s = rule.actions.metric_period_s
+        
+        results.append({
+            "signal_index": idx,
+            "service": test_signal.service,
+            "environment": test_signal.environment,
+            "latency_ms": test_signal.latency_ms,
+            "error": test_signal.error,
+            "matched_rules": matched_rules,
+            "rule_count": len(matched_rules),
+            "effective_config": effective_config.model_dump()
+        })
+    
+    return {
+        "simulation_results": results,
+        "total_signals": len(req.test_signals),
+        "policy_id": req.policy.id,
+        "summary": {
+            "signals_with_matches": sum(1 for r in results if r["rule_count"] > 0),
+            "signals_without_matches": sum(1 for r in results if r["rule_count"] == 0),
+            "total_rule_matches": sum(r["rule_count"] for r in results)
+        }
+    }
 
 
 @v1_router.post("/signal", response_model=EffectiveConfig)
