@@ -117,15 +117,17 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - [ ] Show "effective rules" for test signals (future enhancement)
 
 ### 8. Better Error Handling
-**Status:** Not Started  
+**Status:** ✅ COMPLETED  
 **Impact:** Debugging & Reliability
 
-- [ ] Replace generic 500 errors with specific error codes
-- [ ] Use HTTPException (currently imported but unused)
-- [ ] Return structured error responses (error code, message, details)
-- [ ] Add validation errors with field-level details
-- [ ] Add request ID tracking for debugging
-- [ ] Add error telemetry and categorization
+- [x] Replace generic 500 errors with specific error codes
+- [x] Custom exception hierarchy for structured errors
+- [x] Return structured error responses (error type, message, status, details)
+- [x] Add validation errors with field-level details
+- [x] Enhanced health check endpoint with component status
+- [x] 18 comprehensive tests for error handling
+- [ ] Add request ID tracking for debugging (future enhancement)
+- [ ] Add error telemetry and categorization (future enhancement)
 
 ### 9. API Versioning
 **Status:** Not Started  
