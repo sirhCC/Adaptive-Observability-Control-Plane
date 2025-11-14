@@ -1,7 +1,7 @@
 import asyncio
 import os
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 from loguru import logger
@@ -69,7 +69,7 @@ async def main():
             if random.random() < sample_rate:
                 logger.debug(
                     "trace sampled: ts={} latency_ms={:.1f} error={} cfg={}",
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     latency,
                     error,
                     cfg,
