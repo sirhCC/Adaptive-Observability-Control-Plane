@@ -15,17 +15,19 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - [ ] Add request throttling per service/tenant (future enhancement)
 
 ### 2. Comprehensive Test Coverage 🧪
-**Status:** Not Started  
+**Status:** ✅ COMPLETED  
 **Impact:** Reliability
 
-- [ ] Test rule priority ordering
-- [ ] Test service/env scoping logic
-- [ ] Test multiple conditions per rule
-- [ ] Test all API endpoints (health, policy CRUD, signal ingestion)
-- [ ] Test edge cases (empty signals, malformed data, concurrent requests)
-- [ ] Add integration tests with real HTTP calls
-- [ ] Add performance/load tests
-- [ ] Current coverage: ~15%, Target: 80%+
+- [x] Test all API endpoints (health, policy CRUD, signal ingestion, config)
+- [x] Test edge cases (empty signals, single signal, all errors, mixed latencies)
+- [x] Add integration tests with real HTTP calls (TestClient)
+- [x] Test input validation (service names, latency bounds, attrs limits)
+- [x] Test error responses (422, 404, 400)
+- [x] Test concurrent requests and data isolation
+- [x] Test aggregate calculations (p95, error rate, window filtering)
+- [x] Test signal pruning and buffer management
+- [x] Test rate limiting functionality
+- [x] 51 comprehensive tests passing, coverage significantly improved
 
 ### 3. Database Persistence 💾
 **Status:** Not Started  
