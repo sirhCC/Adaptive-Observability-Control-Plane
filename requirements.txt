@@ -1,11 +1,7 @@
 fastapi==0.121.2
 uvicorn[standard]==0.30.6
 pydantic==2.12.4
-<<<<<<< HEAD
 httpx==0.28.1
-=======
-httpx==0.27.0
->>>>>>> 902eb943e948d6d54e44e5cea743acf31dc623ba
 loguru==0.7.2
 pytest==9.0.1
 slowapi==0.1.9
