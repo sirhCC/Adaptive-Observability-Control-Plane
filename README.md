@@ -23,10 +23,11 @@ A production-ready control plane for adaptive observability that dynamically adj
 - ✅ **Audit Logging** - Full policy change history with versioning
 
 ### 📊 Observability
-- RESTful API with OpenAPI/Swagger docs
-- Health check endpoint for monitoring
-- Structured logging with loguru
-- 61 comprehensive tests with >80% coverage
+- ✅ **Prometheus Metrics** - `/metrics` endpoint with custom control plane metrics
+- ✅ **Structured Logging** - loguru with contextual logging
+- ✅ **Health Checks** - `/healthz` endpoint for monitoring
+- ✅ **OpenAPI/Swagger** - Interactive API documentation
+- ✅ **72 Comprehensive Tests** - >80% code coverage
 
 ---
 
@@ -171,6 +172,7 @@ $env:SECRET_KEY = "your-secret-key-here"
 
 ### Public Endpoints
 - `GET /healthz` - Health check
+- `GET /metrics` - Prometheus metrics endpoint
 - `GET /policy` - Get current policy configuration
 - `GET /config/{service}/{environment}` - Get effective config for a service
 - `POST /signal` - Ingest telemetry signal (optional API key)
@@ -178,6 +180,39 @@ $env:SECRET_KEY = "your-secret-key-here"
 ### Protected Endpoints (Require Admin API Key)
 - `POST /policy` - Update policy configuration
 - `POST /auth/generate-key` - Generate new API keys
+
+### Prometheus Metrics
+
+The `/metrics` endpoint exposes control plane operational metrics in Prometheus format:
+
+**Signal Metrics:**
+- `control_plane_signals_ingested_total` - Total signals ingested per service/environment
+- `control_plane_signals_with_errors_total` - Total error signals
+- `control_plane_signal_latency_ms` - Signal latency histogram
+- `control_plane_signal_buffer_size` - Current buffer size gauge
+- `control_plane_signal_buffer_pruned_total` - Pruned signals counter
+
+**Policy Metrics:**
+- `control_plane_policy_evaluations_total` - Policy evaluations per service/environment
+- `control_plane_policy_evaluation_duration_seconds` - Evaluation duration histogram
+- `control_plane_rule_matches_total` - Rule matches per rule/service/environment
+- `control_plane_policy_updates_total` - Policy updates counter
+- `control_plane_policy_validation_errors_total` - Validation errors counter
+
+**Database Metrics:**
+- `control_plane_db_queries_total` - Database queries per operation/table
+- `control_plane_db_query_duration_seconds` - Query duration histogram
+
+Example scrape configuration for Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: 'control-plane'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+```
 
 ### Example: Send a Signal
 
@@ -256,7 +291,7 @@ See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the complete roadmap.
 4. **Authentication & Authorization** - API keys, admin protection
 
 ### 🚧 In Progress
-5. **Observability for Control Plane** - Metrics, tracing, alerts
+None - Item #5 complete!
 
 ### 📋 Planned
 - Advanced aggregation functions (percentiles, histograms)

@@ -57,16 +57,30 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - [x] 10 comprehensive authentication tests passing
 
 ### 5. Observability for the Control Plane Itself 📊
-**Status:** Not Started  
+**Status:** ✅ COMPLETED  
 **Impact:** Operational Visibility
 
-- [ ] Add metrics on rule evaluation performance (latency, throughput)
-- [ ] Add structured logging for policy changes
-- [ ] Track signal ingestion rate and buffer sizes
-- [ ] Add alerting when control plane is unhealthy
-- [ ] Add distributed tracing for request flows
-- [ ] Add dashboard for control plane health
-- [ ] Expose Prometheus `/metrics` endpoint
+- [x] Add metrics on rule evaluation performance (latency, throughput)
+- [x] Add structured logging for policy changes
+- [x] Track signal ingestion rate and buffer sizes
+- [x] Expose Prometheus `/metrics` endpoint
+- [x] Custom Prometheus metrics for control plane operations
+  - `control_plane_signals_ingested_total` - Total signals ingested per service/env
+  - `control_plane_signals_with_errors_total` - Error signals per service/env
+  - `control_plane_signal_latency_ms` - Signal latency histogram
+  - `control_plane_signal_buffer_size` - Current buffer size gauge
+  - `control_plane_signal_buffer_pruned_total` - Pruned signals counter
+  - `control_plane_policy_evaluations_total` - Policy evaluations per service/env
+  - `control_plane_policy_evaluation_duration_seconds` - Evaluation duration histogram
+  - `control_plane_rule_matches_total` - Rule match counter per rule/service/env
+  - `control_plane_policy_updates_total` - Policy update counter
+  - `control_plane_policy_validation_errors_total` - Validation error counter
+  - `control_plane_db_queries_total` - Database query counter
+  - `control_plane_db_query_duration_seconds` - Database query duration histogram
+- [x] 11 comprehensive metrics tests passing
+- [ ] Add alerting when control plane is unhealthy (future)
+- [ ] Add distributed tracing for request flows (future)
+- [ ] Add Grafana dashboard for control plane health (future)
 
 ---
 

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Literal, Optional
 import re
 import os
+import time
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel, Field, field_validator
@@ -10,10 +11,12 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from control_plane.database import init_db, get_db
 from control_plane.repository import PolicyRepository, SignalRepository
 from control_plane.auth import require_admin_key, get_api_key, get_optional_api_key
+from control_plane import metrics as prom_metrics
 
 # Configuration
 MAX_SIGNALS_PER_SERVICE = 10000  # Max signals to keep per (service, env)
@@ -136,11 +139,21 @@ def _prune(key: tuple[str, str]):
     if not buf:
         return
     # Remove old signals
+    initial_count = len(buf)
     buf = [s for s in buf if s.ts >= cutoff]
     # Enforce max buffer size (keep most recent)
     if len(buf) > MAX_SIGNALS_PER_SERVICE:
         buf = sorted(buf, key=lambda s: s.ts, reverse=True)[:MAX_SIGNALS_PER_SERVICE]
+    
+    pruned_count = initial_count - len(buf)
+    if pruned_count > 0:
+        service, environment = key
+        prom_metrics.record_buffer_pruned(service, environment, pruned_count)
+    
     SIGNALS[key] = buf
+    # Update buffer size metric
+    service, environment = key
+    prom_metrics.update_buffer_size(service, environment, len(buf))
 
 
 def _calc_aggregates(buf: List[Signal], window_s: Optional[int] = None) -> Dict[str, float]:
@@ -177,6 +190,7 @@ op_map = {
 # --- Rule evaluation
 
 def evaluate(service: str, env: str) -> EffectiveConfig:
+    start_time = time.time()
     key = (service, env)
     _prune(key)
     buf = SIGNALS.get(key, [])
@@ -214,6 +228,10 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
         if not matched:
             continue
 
+        # Record rule match
+        prom_metrics.record_rule_match(rule.id, service, env)
+        logger.info(f"Rule '{rule.id}' matched for {service}/{env}")
+
         # Apply actions (last writer wins within ordered rules)
         a = rule.actions
         if a.log_level:
@@ -222,6 +240,11 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
             effective.trace_sample_rate = a.trace_sample_rate
         if a.metric_period_s is not None:
             effective.metric_period_s = a.metric_period_s
+
+    # Record evaluation metrics
+    duration = time.time() - start_time
+    prom_metrics.policy_evaluations_total.labels(service=service, environment=env).inc()
+    prom_metrics.policy_evaluation_duration_seconds.labels(service=service, environment=env).observe(duration)
 
     return effective
 
@@ -232,6 +255,14 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
 async def startup_event():
     """Initialize database and seed default policy if needed."""
     await init_db()
+    
+    # Set control plane info
+    prom_metrics.control_plane_info.info({
+        'version': app.version,
+        'title': app.title,
+    })
+    
+    logger.info("Prometheus metrics enabled at /metrics")
     
     # Seed default policy if no policy exists
     async for db in get_db():
@@ -258,6 +289,16 @@ class UpsertPolicy(BaseModel):
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "ts": _now().isoformat()}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    from fastapi.responses import Response
+    
+    metrics_data = generate_latest()
+    return Response(content=metrics_data, media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/auth/generate-key")
@@ -296,12 +337,18 @@ async def set_policy(
     global POLICY
     # Validate policy has at least one rule
     if not req.policy.rules:
+        prom_metrics.record_policy_validation_error()
         raise HTTPException(status_code=400, detail="Policy must contain at least one rule")
     # Validate rule IDs are unique
     rule_ids = [r.id for r in req.policy.rules]
     if len(rule_ids) != len(set(rule_ids)):
+        prom_metrics.record_policy_validation_error()
         raise HTTPException(status_code=400, detail="Rule IDs must be unique")
+    
     POLICY = req.policy
+    prom_metrics.record_policy_update(req.policy.id)
+    logger.info(f"Policy '{req.policy.id}' updated with {len(req.policy.rules)} rules")
+    
     return POLICY
 
 
@@ -351,6 +398,15 @@ async def ingest_signal(
     key = (s.service, s.environment)
     buf = SIGNALS.setdefault(key, [])
     buf.append(s)
+    
+    # Record signal metrics
+    prom_metrics.record_signal_metrics(
+        s.service,
+        s.environment,
+        s.latency_ms or 0.0,
+        s.error or False
+    )
+    
     _prune(key)
     return evaluate(s.service, s.environment)
 
