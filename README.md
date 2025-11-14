@@ -103,11 +103,13 @@ pytest tests/test_auth.py -v
 pytest --cov=control_plane --cov-report=html
 ```
 
-**Test Coverage**: 61 tests covering:
+**Test Coverage**: 86 tests covering:
 - API integration (21 tests)
 - Authentication & authorization (10 tests)
 - Input validation (17 tests)
 - Rule engine logic (11 tests)
+- Prometheus metrics (11 tests)
+- Advanced aggregations (14 tests)
 - Edge cases & window filtering
 
 ---
@@ -259,6 +261,46 @@ curl -X POST http://localhost:8080/policy `
   }'
 ```
 
+### Available Aggregation Metrics
+
+The control plane calculates comprehensive metrics for rule evaluation:
+
+**Latency Percentiles:**
+- `latency_p50_ms` - Median latency (50th percentile)
+- `latency_p90_ms` - 90th percentile latency
+- `latency_p95_ms` - 95th percentile latency
+- `latency_p99_ms` - 99th percentile latency
+
+**Latency Statistics:**
+- `latency_avg_ms` - Average latency
+- `latency_min_ms` - Minimum latency
+- `latency_max_ms` - Maximum latency
+
+**Error Metrics:**
+- `error_rate` - Error rate (0.0-1.0)
+- `error_count` - Total error count in window
+
+**Request Metrics:**
+- `request_count` - Total request count in window
+- `request_rate_per_sec` - Requests per second
+
+**Example Rule Using Advanced Metrics:**
+
+```json
+{
+  "id": "p99-latency-spike",
+  "description": "Alert on p99 latency spike",
+  "priority": 5,
+  "conditions": [
+    {"kind": "metric", "op": ">", "key": "latency_p99_ms", "value": 1000, "window_s": 60}
+  ],
+  "actions": {
+    "log_level": "WARN",
+    "trace_sample_rate": 0.5
+  }
+}
+```
+
 ---
 
 ## 🐳 Docker Deployment
@@ -294,7 +336,6 @@ See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the complete roadmap.
 None - Item #5 complete!
 
 ### 📋 Planned
-- Advanced aggregation functions (percentiles, histograms)
 - Rule conflict detection and warnings
 - API versioning
 - Multi-tenancy support
