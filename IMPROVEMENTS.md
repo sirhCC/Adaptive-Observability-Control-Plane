@@ -260,15 +260,30 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - [x] Comprehensive tests (26 tests, all passing)
 - [x] Documentation with browser examples
 
-### 15. Graceful Shutdown
-**Status:** Not Started  
+### 15. ✅ Graceful Shutdown
+**Status:** Completed  
 **Impact:** Reliability
 
-- [ ] Add signal handlers for SIGTERM/SIGINT
-- [ ] Wait for in-flight requests to complete
-- [ ] Flush buffered signals before exit
-- [ ] Add configurable shutdown timeout
-- [ ] Add shutdown hooks for cleanup
+- [x] Add signal handlers for SIGTERM/SIGINT
+  - Signal handlers installed during lifespan startup
+  - SIGTERM for Docker/Kubernetes
+  - SIGINT for local development (Ctrl+C)
+- [x] Wait for in-flight requests to complete
+  - Brief grace period (2s) before full shutdown
+  - Respects SHUTDOWN_TIMEOUT configuration
+- [x] Flush buffered signals before exit
+  - Logs count of signals flushed
+  - Clears SIGNALS buffer after flush
+  - Error handling for flush failures
+- [x] Add configurable shutdown timeout
+  - `SHUTDOWN_TIMEOUT` environment variable (default: 30s)
+  - Prevents indefinite hangs
+- [x] Add shutdown hooks for cleanup
+  - Modern lifespan context manager (replaces deprecated on_event)
+  - Startup: Database init, metrics setup, policy seeding
+  - Shutdown: Signal flush, request wait, resource cleanup
+- [x] Comprehensive tests (22 tests, all passing)
+- [x] Documentation with K8s and Docker examples
 
 ### 16. Action Merge Strategies
 **Status:** Not Started  
