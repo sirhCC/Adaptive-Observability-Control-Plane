@@ -156,10 +156,34 @@ def _prune(key: tuple[str, str]):
     prom_metrics.update_buffer_size(service, environment, len(buf))
 
 
+def _percentile(values: List[float], p: float) -> float:
+    """Calculate percentile from sorted values."""
+    if not values:
+        return 0.0
+    idx = int(p * len(values))
+    return values[min(idx, len(values) - 1)]
+
+
 def _calc_aggregates(buf: List[Signal], window_s: Optional[int] = None) -> Dict[str, float]:
-    # Simple aggregates p95 and error rate over the buffer
+    """Calculate comprehensive aggregates over signal buffer.
+    
+    Returns metrics including percentiles (p50, p90, p95, p99),
+    averages, min/max, error rates, and request rates.
+    """
     if not buf:
-        return {"latency_p95_ms": 0.0, "error_rate": 0.0}
+        return {
+            "latency_p50_ms": 0.0,
+            "latency_p90_ms": 0.0,
+            "latency_p95_ms": 0.0,
+            "latency_p99_ms": 0.0,
+            "latency_avg_ms": 0.0,
+            "latency_min_ms": 0.0,
+            "latency_max_ms": 0.0,
+            "error_rate": 0.0,
+            "error_count": 0.0,
+            "request_count": 0.0,
+            "request_rate_per_sec": 0.0,
+        }
     
     # Apply time window filter if specified
     if window_s is not None:
@@ -167,14 +191,60 @@ def _calc_aggregates(buf: List[Signal], window_s: Optional[int] = None) -> Dict[
         buf = [s for s in buf if s.ts >= cutoff]
     
     if not buf:
-        return {"latency_p95_ms": 0.0, "error_rate": 0.0}
+        return {
+            "latency_p50_ms": 0.0,
+            "latency_p90_ms": 0.0,
+            "latency_p95_ms": 0.0,
+            "latency_p99_ms": 0.0,
+            "latency_avg_ms": 0.0,
+            "latency_min_ms": 0.0,
+            "latency_max_ms": 0.0,
+            "error_rate": 0.0,
+            "error_count": 0.0,
+            "request_count": 0.0,
+            "request_rate_per_sec": 0.0,
+        }
     
+    # Latency metrics
     latencies = [s.latency_ms for s in buf if s.latency_ms is not None]
     latencies.sort()
-    # Fixed p95 calculation: use int(0.95 * len(latencies)) instead of (len - 1)
-    p95 = latencies[min(int(0.95 * len(latencies)), len(latencies) - 1)] if latencies else 0.0
-    err = sum(1 for s in buf if s.error) / max(1, len(buf))
-    return {"latency_p95_ms": float(p95), "error_rate": float(err)}
+    
+    if latencies:
+        p50 = _percentile(latencies, 0.50)
+        p90 = _percentile(latencies, 0.90)
+        p95 = _percentile(latencies, 0.95)
+        p99 = _percentile(latencies, 0.99)
+        avg = sum(latencies) / len(latencies)
+        min_lat = min(latencies)
+        max_lat = max(latencies)
+    else:
+        p50 = p90 = p95 = p99 = avg = min_lat = max_lat = 0.0
+    
+    # Error metrics
+    error_count = sum(1 for s in buf if s.error)
+    error_rate = error_count / len(buf)
+    
+    # Request rate calculation
+    request_count = len(buf)
+    if request_count > 1:
+        time_span = (buf[-1].ts - buf[0].ts).total_seconds()
+        request_rate = request_count / max(time_span, 1.0)
+    else:
+        request_rate = 0.0
+    
+    return {
+        "latency_p50_ms": float(p50),
+        "latency_p90_ms": float(p90),
+        "latency_p95_ms": float(p95),
+        "latency_p99_ms": float(p99),
+        "latency_avg_ms": float(avg),
+        "latency_min_ms": float(min_lat),
+        "latency_max_ms": float(max_lat),
+        "error_rate": float(error_rate),
+        "error_count": float(error_count),
+        "request_count": float(request_count),
+        "request_rate_per_sec": float(request_rate),
+    }
 
 
 op_map = {
