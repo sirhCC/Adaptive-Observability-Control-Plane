@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -9,8 +9,12 @@ app = FastAPI(title="Adaptive Observability Control Plane", version="0.1.0")
 
 # --- Models
 class Condition(BaseModel):
-    kind: str = Field(description="metric|error_rate|feature_flag|time|always")
-    op: str = Field(description=">|>=|<|<=|==|!=|in|contains|always")
+    kind: Literal["metric", "error_rate", "feature_flag", "time", "always"] = Field(
+        description="Type of condition to evaluate"
+    )
+    op: Literal[">", ">=", "<", "<=", "==", "!=", "in", "contains", "always"] = Field(
+        description="Comparison operator"
+    )
     key: Optional[str] = None
     # For numeric comparisons we expect a float; keep simple for demo
     value: Optional[float] = None
@@ -101,7 +105,7 @@ WINDOW_MAX = 5 * 60  # seconds to keep raw events
 # --- Helpers
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
 
 
 def _prune(key: tuple[str, str]):
@@ -112,13 +116,23 @@ def _prune(key: tuple[str, str]):
     SIGNALS[key] = [s for s in buf if s.ts >= cutoff]
 
 
-def _calc_aggregates(buf: List[Signal]) -> Dict[str, float]:
+def _calc_aggregates(buf: List[Signal], window_s: Optional[int] = None) -> Dict[str, float]:
     # Simple aggregates p95 and error rate over the buffer
     if not buf:
         return {"latency_p95_ms": 0.0, "error_rate": 0.0}
+    
+    # Apply time window filter if specified
+    if window_s is not None:
+        cutoff = _now() - timedelta(seconds=window_s)
+        buf = [s for s in buf if s.ts >= cutoff]
+    
+    if not buf:
+        return {"latency_p95_ms": 0.0, "error_rate": 0.0}
+    
     latencies = [s.latency_ms for s in buf if s.latency_ms is not None]
     latencies.sort()
-    p95 = latencies[int(0.95 * (len(latencies) - 1))] if latencies else 0.0
+    # Fixed p95 calculation: use int(0.95 * len(latencies)) instead of (len - 1)
+    p95 = latencies[min(int(0.95 * len(latencies)), len(latencies) - 1)] if latencies else 0.0
     err = sum(1 for s in buf if s.error) / max(1, len(buf))
     return {"latency_p95_ms": float(p95), "error_rate": float(err)}
 
@@ -139,7 +153,6 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
     key = (service, env)
     _prune(key)
     buf = SIGNALS.get(key, [])
-    aggs = _calc_aggregates(buf)
 
     effective = EffectiveConfig(service=service, environment=env)
 
@@ -154,6 +167,8 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
         for c in rule.conditions:
             if c.kind == "always" or c.op == "always":
                 continue
+            # Calculate aggregates with per-condition window
+            aggs = _calc_aggregates(buf, c.window_s)
             if c.kind == "error_rate":
                 v = aggs.get("error_rate", 0.0)
                 threshold = float(c.value) if c.value is not None else 0.0
