@@ -27,7 +27,7 @@ A production-ready control plane for adaptive observability that dynamically adj
 - ✅ **Structured Logging** - loguru with contextual logging
 - ✅ **Health Checks** - `/healthz` endpoint for monitoring
 - ✅ **OpenAPI/Swagger** - Interactive API documentation
-- ✅ **154 Comprehensive Tests** - >80% code coverage with extensive error handling tests
+- ✅ **179 Comprehensive Tests** - >80% code coverage with extensive error handling tests
 
 ---
 
@@ -103,7 +103,7 @@ pytest tests/test_auth.py -v
 pytest --cov=control_plane --cov-report=html
 ```
 
-**Test Coverage**: 154 tests covering:
+**Test Coverage**: 179 tests covering:
 - API integration (21 tests)
 - Authentication & authorization (10 tests)
 - Input validation (17 tests)
@@ -114,6 +114,7 @@ pytest --cov=control_plane --cov-report=html
 - Error handling & exceptions (18 tests)
 - Policy testing & simulation (10 tests)
 - Signal replay & time-travel (23 tests)
+- Policy export/import & templates (25 tests)
 - Edge cases & window filtering
 
 ---
@@ -290,6 +291,66 @@ curl "http://localhost:8080/v1/signals/export?start_time=2025-11-14T10:00:00+00:
 ```
 
 Exported signals are in JSON format suitable for replay.
+
+### Policy Export/Import & Templates
+
+**Policy Export** enables GitOps workflows and policy portability:
+
+```powershell
+# Export current policy as JSON
+curl "http://localhost:8080/v1/policy/export?format=json" > policy.json
+
+# Export as YAML
+curl "http://localhost:8080/v1/policy/export?format=yaml" > policy.yaml
+
+# Export with history metadata
+curl "http://localhost:8080/v1/policy/export?include_history=true"
+```
+
+**Policy Import** allows loading policies from files:
+
+```powershell
+# Import policy from JSON file
+curl -X POST "http://localhost:8080/v1/policy/import" `
+  -H "X-API-Key: $env:ADMIN_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d @policy.json
+
+# Import from YAML
+curl -X POST "http://localhost:8080/v1/policy/import" `
+  -H "X-API-Key: $env:ADMIN_API_KEY" `
+  -H "Content-Type: application/x-yaml" `
+  -d @policy.yaml
+
+# Dry-run import (validate without applying)
+curl -X POST "http://localhost:8080/v1/policy/import?dry_run=true" `
+  -H "X-API-Key: $env:ADMIN_API_KEY" `
+  -d @policy.json
+```
+
+**Policy Templates** provide pre-configured starting points:
+
+```powershell
+# List all available templates
+curl "http://localhost:8080/v1/policy/templates"
+
+# Get a specific template
+curl "http://localhost:8080/v1/policy/templates/production-safe"
+
+# Import a template directly
+curl "http://localhost:8080/v1/policy/templates/balanced" | `
+  jq '.template.policy' | `
+  curl -X POST "http://localhost:8080/v1/policy/import" `
+    -H "X-API-Key: $env:ADMIN_API_KEY" `
+    -d @-
+```
+
+**Available Templates:**
+- `production-safe` - Conservative policy for production with error-based elevation
+- `development` - Verbose policy with high sampling for development
+- `performance-focused` - Latency-based adaptive policy
+- `cost-optimized` - Minimal overhead, elevates only on critical issues
+- `balanced` - Balanced policy with error and latency triggers (recommended)
 
 ### Policy Testing & Simulation
 
