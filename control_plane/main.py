@@ -1,12 +1,18 @@
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Literal, Optional
 import re
+import os
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.ext.asyncio import AsyncSession
+from loguru import logger
+
+from control_plane.database import init_db, get_db
+from control_plane.repository import PolicyRepository, SignalRepository
 
 # Configuration
 MAX_SIGNALS_PER_SERVICE = 10000  # Max signals to keep per (service, env)
@@ -217,6 +223,30 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
             effective.metric_period_s = a.metric_period_s
 
     return effective
+
+
+# --- Startup
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database and seed default policy if needed."""
+    await init_db()
+    
+    # Seed default policy if no policy exists
+    async for db in get_db():
+        existing_policy = await PolicyRepository.get_current_policy(db)
+        if not existing_policy:
+            # Convert in-memory default policy to database
+            default_rules = [rule.model_dump() for rule in POLICY.rules]
+            await PolicyRepository.create_policy(
+                db,
+                policy_id=POLICY.id,
+                rules=default_rules,
+                description=POLICY.description,
+                changed_by="system",
+            )
+            logger.info("Seeded default policy to database")
+        break  # Only need one iteration
 
 
 # --- API
