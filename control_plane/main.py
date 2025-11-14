@@ -3,8 +3,11 @@ from typing import Dict, List, Literal, Optional
 import re
 import os
 import time
+import json
+import yaml
 
 from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -470,6 +473,168 @@ async def generate_key(
 async def get_policy(request: Request):
     """Get the current policy configuration."""
     return POLICY
+
+
+@v1_router.get("/policy/export")
+@limiter.limit("20/minute")
+async def export_policy(
+    request: Request,
+    format: Literal["json", "yaml"] = "json",
+    include_history: bool = False
+):
+    """Export current policy configuration in JSON or YAML format.
+    
+    Supports GitOps workflows and policy portability.
+    
+    Args:
+        format: Export format - 'json' (default) or 'yaml'
+        include_history: If True, includes policy version history metadata
+    
+    Returns:
+        Policy configuration in requested format
+    """
+    export_data = {
+        "policy": POLICY.model_dump(),
+        "exported_at": _now().isoformat(),
+        "version": "1.0"
+    }
+    
+    if include_history and POLICY_HISTORY:
+        export_data["history"] = {
+            "versions_available": len(POLICY_HISTORY),
+            "oldest_version": POLICY_HISTORY[0].applied_at.isoformat() if POLICY_HISTORY else None,
+            "newest_version": POLICY_HISTORY[-1].applied_at.isoformat() if POLICY_HISTORY else None
+        }
+    
+    if format == "yaml":
+        yaml_content = yaml.dump(export_data, default_flow_style=False, sort_keys=False)
+        return Response(
+            content=yaml_content,
+            media_type="application/x-yaml",
+            headers={"Content-Disposition": f"attachment; filename=policy-{POLICY.id}.yaml"}
+        )
+    else:
+        json_content = json.dumps(export_data, indent=2)
+        return Response(
+            content=json_content,
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=policy-{POLICY.id}.json"}
+        )
+
+
+@v1_router.post("/policy/import")
+@limiter.limit("10/minute")
+async def import_policy(
+    request: Request,
+    admin: str = Depends(require_admin_key),
+    dry_run: bool = False
+):
+    """Import policy configuration from JSON or YAML.
+    
+    Supports GitOps workflows and policy portability.
+    Automatically detects format from content.
+    
+    Args:
+        dry_run: If True, validates without applying the policy
+        
+    Request body: JSON or YAML policy configuration
+    
+    Returns:
+        Imported policy or validation results if dry_run=True
+    """
+    from control_plane.rule_validator import validate_policy_rules
+    
+    # Get raw body content
+    body_bytes = await request.body()
+    body_str = body_bytes.decode('utf-8')
+    
+    # Try to parse as YAML first (YAML parser can handle JSON too)
+    try:
+        import_data = yaml.safe_load(body_str)
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid YAML/JSON format: {str(e)}")
+    
+    # Extract policy from import data structure
+    if isinstance(import_data, dict) and "policy" in import_data:
+        policy_data = import_data["policy"]
+    else:
+        policy_data = import_data
+    
+    # Validate and parse policy
+    try:
+        imported_policy = Policy(**policy_data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid policy structure: {str(e)}")
+    
+    # Validate policy has at least one rule
+    if not imported_policy.rules:
+        prom_metrics.record_policy_validation_error()
+        raise PolicyValidationError("Policy must contain at least one rule")
+    
+    # Run conflict detection
+    validation_result = validate_policy_rules(imported_policy.rules)
+    
+    # Block if there are errors
+    if not validation_result["valid"]:
+        prom_metrics.record_policy_validation_error()
+        error_conflicts = [c for c in validation_result["conflicts"] if c.severity == "error"]
+        error_messages = [c.message for c in error_conflicts]
+        raise PolicyValidationError(
+            f"Policy validation failed: {'; '.join(error_messages)}",
+            conflicts=[{
+                "type": c.type,
+                "severity": c.severity,
+                "rule_ids": c.rule_ids,
+                "message": c.message
+            } for c in error_conflicts]
+        )
+    
+    # Log warnings but allow import
+    warnings = [c for c in validation_result["conflicts"] if c.severity == "warning"]
+    if warnings:
+        logger.warning(f"Policy import has {len(warnings)} warnings: " + 
+                      "; ".join([c.message for c in warnings]))
+    
+    # If dry_run, return validation results without applying
+    if dry_run:
+        logger.info(f"Dry-run import validation for policy '{imported_policy.id}' successful")
+        return {
+            "dry_run": True,
+            "valid": True,
+            "policy": imported_policy.model_dump(),
+            "validation": {
+                "conflicts": len(validation_result["conflicts"]),
+                "warnings": len(warnings),
+                "details": validation_result
+            },
+            "message": "Policy import is valid and can be applied"
+        }
+    
+    # Apply the imported policy
+    global POLICY
+    POLICY = imported_policy
+    
+    # Save to policy history
+    global POLICY_HISTORY
+    version = PolicyVersion(
+        policy=imported_policy.model_copy(deep=True),
+        applied_at=_now(),
+        applied_by=admin
+    )
+    POLICY_HISTORY.append(version)
+    
+    # Prune old policy history
+    if len(POLICY_HISTORY) > MAX_POLICY_HISTORY:
+        POLICY_HISTORY = POLICY_HISTORY[-MAX_POLICY_HISTORY:]
+    
+    prom_metrics.record_policy_update(imported_policy.id)
+    logger.info(f"Policy '{imported_policy.id}' imported successfully by {admin}")
+    
+    return {
+        "imported": True,
+        "policy": imported_policy.model_dump(),
+        "message": f"Policy '{imported_policy.id}' imported and applied successfully"
+    }
 
 
 @v1_router.post("/policy/validate")
