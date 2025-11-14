@@ -27,7 +27,7 @@ A production-ready control plane for adaptive observability that dynamically adj
 - ✅ **Structured Logging** - loguru with contextual logging
 - ✅ **Health Checks** - `/healthz` endpoint for monitoring
 - ✅ **OpenAPI/Swagger** - Interactive API documentation
-- ✅ **227 Comprehensive Tests** (204 passed, 23 skipped) - >80% code coverage with extensive error handling tests
+- ✅ **249 Comprehensive Tests** (223 passed, 26 skipped) - >80% code coverage with extensive error handling tests
 
 ---
 
@@ -596,6 +596,67 @@ fetch('http://localhost:8080/v1/policy', {
 })
 .then(response => response.json())
 .then(data => console.log('Policy updated:', data));
+```
+
+## Graceful Shutdown
+
+**Production-Ready Shutdown** with signal handling and resource cleanup:
+
+The control plane implements graceful shutdown using FastAPI's modern lifespan context manager:
+
+```yaml
+# Kubernetes configuration with proper termination
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane
+spec:
+  template:
+    spec:
+      containers:
+      - name: control-plane
+        image: control-plane:latest
+        env:
+        - name: SHUTDOWN_TIMEOUT
+          value: "30"  # seconds
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 5"]  # Brief delay before SIGTERM
+      terminationGracePeriodSeconds: 35  # Slightly longer than SHUTDOWN_TIMEOUT
+```
+
+**Shutdown Process:**
+1. **Signal Handling** - Catches SIGTERM (Docker/K8s) and SIGINT (Ctrl+C)
+2. **Signal Buffer Flush** - Flushes buffered signals before exit
+3. **Request Completion** - Waits for in-flight requests (with timeout)
+4. **Resource Cleanup** - Closes database connections and clears buffers
+
+**Environment Variables:**
+- `SHUTDOWN_TIMEOUT` - Maximum seconds to wait for cleanup (default: `30`)
+
+**Docker Deployment:**
+```powershell
+# Run with custom shutdown timeout
+docker run -p 8080:8080 \
+  -e SHUTDOWN_TIMEOUT="60" \
+  control-plane
+
+# Stop gracefully (sends SIGTERM)
+docker stop control-plane  # Waits for graceful shutdown
+
+# Force stop after timeout
+docker stop -t 45 control-plane  # 45 second timeout
+```
+
+**Shutdown Logging:**
+```
+2025-11-14 18:00:00 | INFO | Received SIGTERM, initiating graceful shutdown...
+2025-11-14 18:00:00 | INFO | Shutting down control plane...
+2025-11-14 18:00:00 | INFO | Flushing signals from 5 services...
+2025-11-14 18:00:00 | INFO | Flushed 150 buffered signals (tracked for 5 service(s))
+2025-11-14 18:00:00 | INFO | Waiting up to 30s for in-flight requests...
+2025-11-14 18:00:02 | INFO | Control plane shutdown complete
 ```
 
 ---
