@@ -396,6 +396,31 @@ async def get_policy(request: Request):
     return POLICY
 
 
+@app.post("/policy/validate")
+@limiter.limit("20/minute")
+async def validate_policy(request: Request, req: UpsertPolicy):
+    """Validate a policy configuration without applying it."""
+    from control_plane.rule_validator import validate_policy_rules
+    
+    # Run validation
+    validation_result = validate_policy_rules(req.policy.rules)
+    
+    return {
+        "valid": validation_result["valid"],
+        "summary": validation_result["summary"],
+        "conflicts": [
+            {
+                "type": c.type,
+                "severity": c.severity,
+                "rule_ids": c.rule_ids,
+                "message": c.message,
+                "suggestion": c.suggestion
+            }
+            for c in validation_result["conflicts"]
+        ]
+    }
+
+
 @app.post("/policy", response_model=Policy)
 @limiter.limit("10/minute")  # Strict limit on policy updates
 async def set_policy(
@@ -404,16 +429,32 @@ async def set_policy(
     admin: str = Depends(require_admin_key),
 ):
     """Update the policy configuration. Requires admin API key."""
+    from control_plane.rule_validator import validate_policy_rules
+    
     global POLICY
     # Validate policy has at least one rule
     if not req.policy.rules:
         prom_metrics.record_policy_validation_error()
         raise HTTPException(status_code=400, detail="Policy must contain at least one rule")
-    # Validate rule IDs are unique
-    rule_ids = [r.id for r in req.policy.rules]
-    if len(rule_ids) != len(set(rule_ids)):
+    
+    # Run conflict detection
+    validation_result = validate_policy_rules(req.policy.rules)
+    
+    # Block if there are errors
+    if not validation_result["valid"]:
         prom_metrics.record_policy_validation_error()
-        raise HTTPException(status_code=400, detail="Rule IDs must be unique")
+        error_conflicts = [c for c in validation_result["conflicts"] if c.severity == "error"]
+        error_messages = [c.message for c in error_conflicts]
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Policy validation failed: {'; '.join(error_messages)}"
+        )
+    
+    # Log warnings but allow update
+    warnings = [c for c in validation_result["conflicts"] if c.severity == "warning"]
+    if warnings:
+        logger.warning(f"Policy update has {len(warnings)} warnings: " + 
+                      "; ".join([c.message for c in warnings]))
     
     POLICY = req.policy
     prom_metrics.record_policy_update(req.policy.id)

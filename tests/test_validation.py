@@ -179,7 +179,8 @@ class TestPolicyValidation:
             }
         })
         assert response.status_code == 400
-        assert "unique" in response.json()["detail"].lower()
+        detail = response.json()["detail"].lower()
+        assert "duplicate" in detail or "unique" in detail
     
     def test_valid_policy_accepted(self):
         """Valid policy should be accepted."""
