@@ -190,15 +190,27 @@ This document tracks improvements, fixes, and features to be implemented, priori
 
 ## 🟢 LOW PRIORITY (Nice to Have)
 
-### 12. Export/Import Policies
-**Status:** Not Started  
+### 12. ✅ Export/Import Policies
+**Status:** Completed  
 **Impact:** Portability
 
-- [ ] Add `GET /policy/export` returning YAML/JSON
-- [ ] Add `POST /policy/import` from file
-- [ ] Support GitOps workflow (policy as code)
-- [ ] Add policy templates/presets
-- [ ] Version control integration
+- [x] Add `GET /v1/policy/export` returning YAML/JSON
+  - Supports both JSON and YAML formats
+  - Optional history metadata included
+  - Proper content-type and download headers
+- [x] Add `POST /v1/policy/import` from file
+  - Auto-detects JSON/YAML format
+  - Dry-run mode for validation
+  - Full validation with conflict detection
+- [x] Support GitOps workflow (policy as code)
+  - Export/import round-trip tested
+  - Templates can be imported directly
+- [x] Add policy templates/presets
+  - 5 templates: production-safe, development, performance-focused, cost-optimized, balanced
+  - GET `/v1/policy/templates` - List all templates
+  - GET `/v1/policy/templates/{name}` - Get specific template
+- [x] Comprehensive tests (25 tests, all passing)
+- [x] Documentation updated in README.md
 
 ### 13. Docker Health Checks
 **Status:** Not Started  
