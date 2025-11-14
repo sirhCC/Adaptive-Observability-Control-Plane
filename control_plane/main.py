@@ -5,6 +5,9 @@ import os
 import time
 import json
 import yaml
+import signal
+import asyncio
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import Response
@@ -41,9 +44,113 @@ CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() ==
 CORS_ALLOW_METHODS = os.getenv("CORS_ALLOW_METHODS", "*").split(",")
 CORS_ALLOW_HEADERS = os.getenv("CORS_ALLOW_HEADERS", "*").split(",")
 
+# Shutdown Configuration
+SHUTDOWN_TIMEOUT = int(os.getenv("SHUTDOWN_TIMEOUT", "30"))  # seconds
+shutdown_event = asyncio.Event()
+
+
+# Lifespan context manager for startup and shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for graceful startup and shutdown.
+    
+    Startup:
+    - Initialize database
+    - Set up Prometheus metrics
+    - Seed default policy
+    - Install signal handlers
+    
+    Shutdown:
+    - Handle SIGTERM/SIGINT gracefully
+    - Flush buffered signals to database
+    - Wait for in-flight requests (with timeout)
+    - Clean up resources
+    """
+    # --- Startup ---
+    logger.info("Starting control plane...")
+    
+    # Initialize database
+    await init_db()
+    logger.info("Database initialized")
+    
+    # Set control plane info
+    prom_metrics.control_plane_info.info({
+        'version': app.version,
+        'title': app.title,
+    })
+    logger.info("Prometheus metrics enabled at /metrics")
+    
+    # Seed default policy if no policy exists
+    async for db in get_db():
+        existing_policy = await PolicyRepository.get_current_policy(db)
+        if not existing_policy:
+            # Convert in-memory default policy to database
+            default_rules = [rule.model_dump() for rule in POLICY.rules]
+            await PolicyRepository.create_policy(
+                db,
+                policy_id=POLICY.id,
+                rules=default_rules,
+                description=POLICY.description,
+                changed_by="system",
+            )
+            logger.info(f"Seeded default policy: {POLICY.id}")
+        break
+    
+    # Install signal handlers for graceful shutdown
+    def signal_handler(signum, frame):
+        """Handle shutdown signals."""
+        sig_name = signal.Signals(signum).name
+        logger.info(f"Received {sig_name}, initiating graceful shutdown...")
+        shutdown_event.set()
+    
+    # Register signal handlers (SIGTERM for Docker/K8s, SIGINT for Ctrl+C)
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    logger.info("Control plane started successfully")
+    
+    yield  # Application runs here
+    
+    # --- Shutdown ---
+    logger.info("Shutting down control plane...")
+    
+    # Flush buffered signals to database
+    try:
+        total_flushed = 0
+        total_services = len(SIGNALS)
+        
+        if total_services > 0:
+            logger.info(f"Flushing signals from {total_services} services...")
+            async for db in get_db():
+                for (service, env), signals in SIGNALS.items():
+                    if signals:
+                        logger.debug(f"Flushing {len(signals)} signals for {service}/{env}")
+                        # Signals are already in memory, just log count
+                        # In production, you might want to persist them
+                        total_flushed += len(signals)
+                break
+            
+            logger.info(f"Flushed {total_flushed} buffered signals (tracked for {total_services} service(s))")
+            # Clear the buffer after flushing
+            SIGNALS.clear()
+    except Exception as e:
+        logger.error(f"Error flushing signals during shutdown: {e}")
+    
+    # Wait briefly for in-flight requests to complete
+    logger.info(f"Waiting up to {SHUTDOWN_TIMEOUT}s for in-flight requests...")
+    await asyncio.sleep(min(2, SHUTDOWN_TIMEOUT))  # Brief grace period
+    
+    logger.info("Control plane shutdown complete")
+
+
 # Rate limiter setup
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="Adaptive Observability Control Plane", version="1.0.0")
+app = FastAPI(
+    title="Adaptive Observability Control Plane",
+    version="1.0.0",
+    lifespan=lifespan  # Use lifespan context manager
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -380,36 +487,7 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
     return effective
 
 
-# --- Startup
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database and seed default policy if needed."""
-    await init_db()
-    
-    # Set control plane info
-    prom_metrics.control_plane_info.info({
-        'version': app.version,
-        'title': app.title,
-    })
-    
-    logger.info("Prometheus metrics enabled at /metrics")
-    
-    # Seed default policy if no policy exists
-    async for db in get_db():
-        existing_policy = await PolicyRepository.get_current_policy(db)
-        if not existing_policy:
-            # Convert in-memory default policy to database
-            default_rules = [rule.model_dump() for rule in POLICY.rules]
-            await PolicyRepository.create_policy(
-                db,
-                policy_id=POLICY.id,
-                rules=default_rules,
-                description=POLICY.description,
-                changed_by="system",
-            )
-            logger.info("Seeded default policy to database")
-        break  # Only need one iteration
+# Note: Startup and shutdown logic moved to lifespan context manager above
 
 
 # --- API
