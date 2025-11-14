@@ -138,6 +138,17 @@ POLICY = Policy(
 SIGNALS: Dict[tuple[str, str], List[Signal]] = {}
 WINDOW_MAX = 5 * 60  # seconds to keep raw events
 
+# Policy version history for time-travel debugging
+class PolicyVersion(BaseModel):
+    """Represents a policy configuration at a specific point in time."""
+    policy: Policy
+    applied_at: datetime
+    applied_by: Optional[str] = None
+
+# Store up to 100 historical policy versions
+POLICY_HISTORY: List[PolicyVersion] = []
+MAX_POLICY_HISTORY = 100
+
 
 # --- Helpers
 
@@ -552,8 +563,22 @@ async def set_policy(
     
     # Apply the policy
     POLICY = req.policy
+    
+    # Save to policy history for time-travel debugging
+    global POLICY_HISTORY
+    version = PolicyVersion(
+        policy=req.policy.model_copy(deep=True),
+        applied_at=_now(),
+        applied_by=admin  # admin username from API key
+    )
+    POLICY_HISTORY.append(version)
+    
+    # Prune old policy history
+    if len(POLICY_HISTORY) > MAX_POLICY_HISTORY:
+        POLICY_HISTORY = POLICY_HISTORY[-MAX_POLICY_HISTORY:]
+    
     prom_metrics.record_policy_update(req.policy.id)
-    logger.info(f"Policy '{req.policy.id}' updated with {len(req.policy.rules)} rules")
+    logger.info(f"Policy '{req.policy.id}' updated with {len(req.policy.rules)} rules by {admin}")
     
     return POLICY
 
@@ -564,6 +589,10 @@ class SignalIn(BaseModel):
     latency_ms: Optional[float] = Field(None, ge=0.0, le=1_000_000.0)
     error: Optional[bool] = None
     attrs: Dict[str, str] = Field(default_factory=dict, max_length=50)
+    timestamp: Optional[datetime] = Field(
+        None,
+        description="Client-provided timestamp. If not provided, server time is used. Useful for replay/debugging."
+    )
     
     @field_validator('service', 'environment')
     @classmethod
@@ -579,6 +608,26 @@ class SignalIn(BaseModel):
             if len(key) > 128 or len(value) > 1024:
                 raise ValueError("Attribute keys must be ≤128 chars, values ≤1024 chars")
         return v
+    
+    @field_validator('timestamp')
+    @classmethod
+    def validate_timestamp(cls, v: Optional[datetime]) -> Optional[datetime]:
+        if v is not None:
+            # Reject timestamps more than 7 days in the past or future
+            now = datetime.now(timezone.utc)
+            max_past = now - timedelta(days=7)
+            max_future = now + timedelta(days=1)
+            
+            # Ensure timezone-aware comparison
+            if v.tzinfo is None:
+                v = v.replace(tzinfo=timezone.utc)
+            
+            if v < max_past:
+                raise ValueError("Timestamp cannot be more than 7 days in the past")
+            if v > max_future:
+                raise ValueError("Timestamp cannot be more than 1 day in the future")
+        
+        return v
 
 
 class SimulateRequest(BaseModel):
@@ -589,6 +638,36 @@ class SimulateRequest(BaseModel):
         min_length=1, 
         max_length=100,
         description="Test signals to evaluate (1-100)"
+    )
+
+
+class ReplayRequest(BaseModel):
+    """Request to replay historical signals with a policy."""
+    signals: List[SignalIn] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Signals to replay (1-100). Must include timestamps."
+    )
+    policy_timestamp: Optional[str] = Field(
+        None,
+        description="ISO 8601 timestamp. Use policy that was active at this time. If not provided, uses current policy."
+    )
+
+
+class CompareRequest(BaseModel):
+    """Request to compare how different policies would handle the same signals."""
+    signals: List[SignalIn] = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="Signals to analyze (1-50)"
+    )
+    compare_policies: List[str] = Field(
+        ...,
+        min_length=2,
+        max_length=5,
+        description="ISO 8601 timestamps of policies to compare (2-5). Use 'current' for current policy."
     )
 
 
@@ -691,6 +770,506 @@ async def simulate_policy(request: Request, req: SimulateRequest):
     }
 
 
+@v1_router.get("/history/policy")
+@limiter.limit("20/minute")
+async def get_policy_history(
+    request: Request,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    limit: int = 50
+):
+    """Get policy version history for time-travel debugging.
+    
+    Query historical policy configurations to understand what policy was active
+    at a given time. Useful for debugging and auditing.
+    
+    Args:
+        start_time: ISO 8601 timestamp to filter from (optional)
+        end_time: ISO 8601 timestamp to filter to (optional)
+        limit: Maximum number of versions to return (default 50, max 100)
+    
+    Returns:
+        List of policy versions with timestamps and who applied them
+    """
+    # Limit the result count
+    limit = min(limit, 100)
+    
+    # Filter by time range if provided
+    filtered = POLICY_HISTORY
+    
+    if start_time:
+        start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+        filtered = [v for v in filtered if v.applied_at >= start_dt]
+    
+    if end_time:
+        end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        filtered = [v for v in filtered if v.applied_at <= end_dt]
+    
+    # Sort by time descending (most recent first) and limit
+    filtered = sorted(filtered, key=lambda v: v.applied_at, reverse=True)[:limit]
+    
+    return {
+        "versions": [
+            {
+                "policy": v.policy.model_dump(),
+                "applied_at": v.applied_at.isoformat(),
+                "applied_by": v.applied_by
+            }
+            for v in filtered
+        ],
+        "count": len(filtered),
+        "total_in_history": len(POLICY_HISTORY)
+    }
+
+
+@v1_router.get("/history/policy/at")
+@limiter.limit("20/minute")
+async def get_policy_at_time(
+    request: Request,
+    timestamp: str
+):
+    """Get the policy that was active at a specific time.
+    
+    Time-travel debugging: returns the policy configuration that would have been
+    active at the specified timestamp.
+    
+    Args:
+        timestamp: ISO 8601 timestamp to query
+    
+    Returns:
+        The policy that was active at that time, or current policy if no history
+    """
+    # URL encoding may turn + into space, so handle both formats
+    timestamp_fixed = timestamp.replace(' ', '+').replace('Z', '+00:00')
+    query_time = datetime.fromisoformat(timestamp_fixed)
+    
+    # Find the most recent policy version that was applied before the query time
+    applicable_versions = [
+        v for v in POLICY_HISTORY 
+        if v.applied_at <= query_time
+    ]
+    
+    if applicable_versions:
+        # Get the most recent one
+        policy_version = sorted(applicable_versions, key=lambda v: v.applied_at, reverse=True)[0]
+        return {
+            "policy": policy_version.policy.model_dump(),
+            "applied_at": policy_version.applied_at.isoformat(),
+            "applied_by": policy_version.applied_by,
+            "query_time": query_time.isoformat()
+        }
+    else:
+        # No history before this time, return current policy
+        return {
+            "policy": POLICY.model_dump(),
+            "applied_at": None,
+            "applied_by": None,
+            "query_time": query_time.isoformat(),
+            "note": "No policy history available before this time, returning current policy"
+        }
+
+
+@v1_router.post("/replay")
+@limiter.limit("20/minute")
+async def replay_signals(request: Request, req: ReplayRequest):
+    """Replay historical signals to see what configs would have been returned.
+    
+    Time-travel debugging: replay past signals with either the current policy
+    or the policy that was active at a specific time. Shows what configuration
+    would have been returned, enabling "what would have happened" analysis.
+    
+    All signals must include timestamps. Use this to understand how policy
+    changes would affect past behavior.
+    
+    Args:
+        signals: Historical signals to replay (must include timestamps)
+        policy_timestamp: If provided, uses policy active at this time. Otherwise uses current policy.
+    
+    Returns:
+        Replay results showing effective config for each signal
+    """
+    # Validate all signals have timestamps
+    for idx, sig in enumerate(req.signals):
+        if sig.timestamp is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Signal at index {idx} missing timestamp. All signals must have timestamps for replay."
+            )
+    
+    # Determine which policy to use
+    policy_to_use = POLICY
+    policy_info = {
+        "using": "current",
+        "policy_id": POLICY.id
+    }
+    
+    if req.policy_timestamp:
+        # Handle URL encoding which may turn + into space
+        policy_ts_fixed = req.policy_timestamp.replace(' ', '+').replace('Z', '+00:00')
+        query_time = datetime.fromisoformat(policy_ts_fixed)
+        
+        # Find policy at that time
+        applicable_versions = [
+            v for v in POLICY_HISTORY 
+            if v.applied_at <= query_time
+        ]
+        
+        if applicable_versions:
+            policy_version = sorted(applicable_versions, key=lambda v: v.applied_at, reverse=True)[0]
+            policy_to_use = policy_version.policy
+            policy_info = {
+                "using": "historical",
+                "policy_id": policy_to_use.id,
+                "applied_at": policy_version.applied_at.isoformat(),
+                "applied_by": policy_version.applied_by,
+                "query_time": query_time.isoformat()
+            }
+        else:
+            policy_info["note"] = f"No policy history before {query_time.isoformat()}, using current policy"
+    
+    # Replay each signal
+    results = []
+    
+    for idx, sig_in in enumerate(req.signals):
+        # Convert SignalIn to Signal (use client-provided timestamp)
+        # We validated above that all signals have timestamps
+        signal_time = sig_in.timestamp
+        assert signal_time is not None, "Signal timestamp must not be None"
+        
+        if signal_time.tzinfo is None:
+            signal_time = signal_time.replace(tzinfo=timezone.utc)
+            
+        replay_signal = Signal(
+            service=sig_in.service,
+            environment=sig_in.environment,
+            ts=signal_time,
+            latency_ms=sig_in.latency_ms,
+            error=sig_in.error,
+            attrs=sig_in.attrs,
+        )
+        
+        # Create mock buffer for aggregates (in real replay, could use historical data)
+        mock_buffer = [replay_signal]
+        agg = _calc_aggregates(mock_buffer)
+        
+        # Compute effective config using the selected policy
+        effective_config = EffectiveConfig(
+            service=replay_signal.service,
+            environment=replay_signal.environment
+        )
+        
+        matched_rules = []
+        
+        for rule in policy_to_use.rules:
+            if not rule.enabled:
+                continue
+                
+            # Check if rule scope matches
+            if rule.service and rule.service != "*" and rule.service != replay_signal.service:
+                continue
+            if rule.environment and rule.environment != "*" and rule.environment != replay_signal.environment:
+                continue
+            
+            # Evaluate conditions
+            match = True
+            for cond in rule.conditions:
+                if not _eval_condition(cond, replay_signal, agg):
+                    match = False
+                    break
+            
+            if match:
+                matched_rules.append({
+                    "rule_id": rule.id,
+                    "priority": rule.priority,
+                    "description": rule.description
+                })
+                
+                # Apply actions
+                if rule.actions.log_level:
+                    effective_config.log_level = rule.actions.log_level
+                if rule.actions.trace_sample_rate is not None:
+                    effective_config.trace_sample_rate = rule.actions.trace_sample_rate
+                if rule.actions.metric_period_s is not None:
+                    effective_config.metric_period_s = rule.actions.metric_period_s
+        
+        results.append({
+            "signal_index": idx,
+            "signal_timestamp": signal_time.isoformat(),
+            "service": replay_signal.service,
+            "environment": replay_signal.environment,
+            "matched_rules": matched_rules,
+            "effective_config": effective_config.model_dump()
+        })
+    
+    return {
+        "replay_results": results,
+        "total_signals": len(req.signals),
+        "policy_info": policy_info
+    }
+
+
+@v1_router.post("/compare")
+@limiter.limit("20/minute")
+async def compare_policies(request: Request, req: CompareRequest):
+    """Compare how different policies would handle the same signals.
+    
+    "What would have happened" analysis: shows how effective configs would differ
+    across multiple policy versions for the same signals. Useful for understanding
+    the impact of policy changes.
+    
+    Args:
+        signals: Signals to analyze (can be historical or synthetic)
+        compare_policies: List of policy timestamps to compare, or 'current' for current policy
+    
+    Returns:
+        Comparison showing effective configs and differences across policies
+    """
+    # Resolve policies to compare
+    policies_to_compare = []
+    
+    for policy_ref in req.compare_policies:
+        if policy_ref.lower() == "current":
+            policies_to_compare.append({
+                "policy": POLICY,
+                "label": "current",
+                "policy_id": POLICY.id,
+                "applied_at": None
+            })
+        else:
+            # Parse as timestamp
+            # URL encoding may turn + into space, so handle both formats
+            policy_ref_fixed = policy_ref.replace(' ', '+').replace('Z', '+00:00')
+            query_time = datetime.fromisoformat(policy_ref_fixed)
+            
+            # Find policy at that time
+            applicable_versions = [
+                v for v in POLICY_HISTORY 
+                if v.applied_at <= query_time
+            ]
+            
+            if applicable_versions:
+                policy_version = sorted(applicable_versions, key=lambda v: v.applied_at, reverse=True)[0]
+                policies_to_compare.append({
+                    "policy": policy_version.policy,
+                    "label": policy_ref,
+                    "policy_id": policy_version.policy.id,
+                    "applied_at": policy_version.applied_at.isoformat()
+                })
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No policy history available before {query_time.isoformat()}"
+                )
+    
+    # Compare each signal across all policies
+    comparison_results = []
+    
+    for idx, sig_in in enumerate(req.signals):
+        # Convert SignalIn to Signal
+        signal_time = sig_in.timestamp if sig_in.timestamp else _now()
+        if signal_time.tzinfo is None:
+            signal_time = signal_time.replace(tzinfo=timezone.utc)
+            
+        test_signal = Signal(
+            service=sig_in.service,
+            environment=sig_in.environment,
+            ts=signal_time,
+            latency_ms=sig_in.latency_ms,
+            error=sig_in.error,
+            attrs=sig_in.attrs,
+        )
+        
+        # Create mock buffer for aggregates
+        mock_buffer = [test_signal]
+        agg = _calc_aggregates(mock_buffer)
+        
+        # Evaluate with each policy
+        policy_results = []
+        
+        for policy_info in policies_to_compare:
+            policy = policy_info["policy"]
+            
+            effective_config = EffectiveConfig(
+                service=test_signal.service,
+                environment=test_signal.environment
+            )
+            
+            matched_rules = []
+            
+            for rule in policy.rules:
+                if not rule.enabled:
+                    continue
+                    
+                # Check if rule scope matches
+                if rule.service and rule.service != "*" and rule.service != test_signal.service:
+                    continue
+                if rule.environment and rule.environment != "*" and rule.environment != test_signal.environment:
+                    continue
+                
+                # Evaluate conditions
+                match = True
+                for cond in rule.conditions:
+                    if not _eval_condition(cond, test_signal, agg):
+                        match = False
+                        break
+                
+                if match:
+                    matched_rules.append(rule.id)
+                    
+                    # Apply actions
+                    if rule.actions.log_level:
+                        effective_config.log_level = rule.actions.log_level
+                    if rule.actions.trace_sample_rate is not None:
+                        effective_config.trace_sample_rate = rule.actions.trace_sample_rate
+                    if rule.actions.metric_period_s is not None:
+                        effective_config.metric_period_s = rule.actions.metric_period_s
+            
+            policy_results.append({
+                "policy_label": policy_info["label"],
+                "policy_id": policy_info["policy_id"],
+                "applied_at": policy_info["applied_at"],
+                "matched_rules": matched_rules,
+                "effective_config": effective_config.model_dump()
+            })
+        
+        # Calculate differences
+        configs = [pr["effective_config"] for pr in policy_results]
+        differences = []
+        
+        # Compare each config with the first one
+        base_config = configs[0]
+        for i, config in enumerate(configs[1:], 1):
+            diff = {}
+            for key in ["log_level", "trace_sample_rate", "metric_period_s"]:
+                if base_config[key] != config[key]:
+                    diff[key] = {
+                        "from": base_config[key],
+                        "to": config[key]
+                    }
+            if diff:
+                differences.append({
+                    "from_policy": policy_results[0]["policy_label"],
+                    "to_policy": policy_results[i]["policy_label"],
+                    "changes": diff
+                })
+        
+        comparison_results.append({
+            "signal_index": idx,
+            "service": test_signal.service,
+            "environment": test_signal.environment,
+            "policy_results": policy_results,
+            "has_differences": len(differences) > 0,
+            "differences": differences
+        })
+    
+    # Summary statistics
+    signals_with_differences = sum(1 for r in comparison_results if r["has_differences"])
+    
+    return {
+        "comparison_results": comparison_results,
+        "total_signals": len(req.signals),
+        "policies_compared": len(policies_to_compare),
+        "summary": {
+            "signals_with_differences": signals_with_differences,
+            "signals_without_differences": len(req.signals) - signals_with_differences
+        }
+    }
+
+
+@v1_router.get("/signals/export")
+@limiter.limit("20/minute")
+async def export_signals(
+    request: Request,
+    service: Optional[str] = None,
+    environment: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    limit: int = 1000
+):
+    """Export signals for offline analysis.
+    
+    Download signals from the buffer for offline analysis, debugging, or archival.
+    Supports filtering by service, environment, and time range.
+    
+    Args:
+        service: Filter by service name (optional)
+        environment: Filter by environment (optional)
+        start_time: ISO 8601 timestamp to filter from (optional)
+        end_time: ISO 8601 timestamp to filter to (optional)
+        limit: Maximum number of signals to export (default 1000, max 5000)
+    
+    Returns:
+        Signals in JSON format suitable for replay or offline analysis
+    """
+    # Limit the result count
+    limit = min(limit, 5000)
+    
+    # Parse time filters if provided
+    start_dt = None
+    end_dt = None
+    
+    if start_time:
+        # URL encoding may turn + into space, so handle both formats
+        start_time_fixed = start_time.replace(' ', '+').replace('Z', '+00:00')
+        start_dt = datetime.fromisoformat(start_time_fixed)
+    if end_time:
+        # URL encoding may turn + into space, so handle both formats
+        end_time_fixed = end_time.replace(' ', '+').replace('Z', '+00:00')
+        end_dt = datetime.fromisoformat(end_time_fixed)
+    
+    # Collect signals from buffer
+    exported_signals = []
+    
+    for key, buffer in SIGNALS.items():
+        svc, env = key
+        
+        # Apply service/environment filters
+        if service and svc != service:
+            continue
+        if environment and env != environment:
+            continue
+        
+        # Filter and export signals
+        for signal in buffer:
+            # Apply time range filters
+            if start_dt and signal.ts < start_dt:
+                continue
+            if end_dt and signal.ts > end_dt:
+                continue
+            
+            exported_signals.append({
+                "service": signal.service,
+                "environment": signal.environment,
+                "timestamp": signal.ts.isoformat(),
+                "latency_ms": signal.latency_ms,
+                "error": signal.error,
+                "attrs": signal.attrs
+            })
+            
+            # Check limit
+            if len(exported_signals) >= limit:
+                break
+        
+        if len(exported_signals) >= limit:
+            break
+    
+    # Sort by timestamp
+    exported_signals.sort(key=lambda s: s["timestamp"])
+    
+    return {
+        "signals": exported_signals,
+        "count": len(exported_signals),
+        "filters": {
+            "service": service,
+            "environment": environment,
+            "start_time": start_time,
+            "end_time": end_time,
+            "limit": limit
+        },
+        "export_time": _now().isoformat()
+    }
+
+
 @v1_router.post("/signal", response_model=EffectiveConfig)
 @limiter.limit("100/minute")  # 100 requests per minute per IP
 async def ingest_signal(
@@ -698,15 +1277,26 @@ async def ingest_signal(
     sig: SignalIn,
     api_key: Optional[str] = Depends(get_optional_api_key),
 ):
-    """Ingest telemetry signal and return effective configuration. API key recommended."""
+    """Ingest telemetry signal and return effective configuration. API key recommended.
+    
+    Supports client-provided timestamps for replay/debugging scenarios.
+    If timestamp is not provided, server time is used.
+    """
     # Log API key usage for monitoring
     if api_key:
         logger.debug(f"Signal from authenticated service: {sig.service}")
     
+    # Use client-provided timestamp if available, otherwise use server time
+    signal_time = sig.timestamp if sig.timestamp is not None else _now()
+    
+    # Ensure timezone-aware timestamp
+    if signal_time.tzinfo is None:
+        signal_time = signal_time.replace(tzinfo=timezone.utc)
+    
     s = Signal(
         service=sig.service,
         environment=sig.environment,
-        ts=_now(),
+        ts=signal_time,
         latency_ms=sig.latency_ms,
         error=sig.error,
         attrs=sig.attrs,
