@@ -181,17 +181,19 @@ $env:SECRET_KEY = "your-secret-key-here"
 
 ## 📡 API Endpoints
 
+All API endpoints are versioned under the `/v1` prefix for future compatibility.
+
 ### Public Endpoints
-- `GET /healthz` - Health check
-- `GET /metrics` - Prometheus metrics endpoint
-- `GET /policy` - Get current policy configuration
-- `POST /policy/validate` - Validate policy configuration (no changes applied)
-- `GET /config/{service}/{environment}` - Get effective config for a service
-- `POST /signal` - Ingest telemetry signal (optional API key)
+- `GET /v1/healthz` - Health check with component status
+- `GET /v1/metrics` - Prometheus metrics endpoint
+- `GET /v1/policy` - Get current policy configuration
+- `POST /v1/policy/validate` - Validate policy configuration (no changes applied)
+- `GET /v1/config/{service}/{environment}` - Get effective config for a service
+- `POST /v1/signal` - Ingest telemetry signal (optional API key)
 
 ### Protected Endpoints (Require Admin API Key)
-- `POST /policy` - Update policy configuration
-- `POST /auth/generate-key` - Generate new API keys
+- `POST /v1/policy` - Update policy configuration
+- `POST /v1/auth/generate-key` - Generate new API keys
 
 ### Prometheus Metrics
 
@@ -345,12 +347,13 @@ See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the complete roadmap.
 6. **Advanced Aggregation Functions** - Percentiles, stats, error metrics
 7. **Rule Conflict Detection** - Policy validation with actionable warnings
 8. **Better Error Handling** - Custom exceptions with structured responses
+9. **API Versioning** - All endpoints now under `/v1` prefix
 
 ### 🚧 In Progress
-None - ready for Item #9!
+None - ready for Item #10!
 
 ### 📋 Planned
-- API versioning
+- Configuration validation endpoint (pre-flight validation)
 - Multi-tenancy support
 - OpenTelemetry Collector integration
 - Language-specific SDK shims
