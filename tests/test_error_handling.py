@@ -56,7 +56,7 @@ class TestErrorResponses:
         client = TestClient(app)
         
         # Send invalid signal (missing required fields)
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test"
             # Missing environment and other required fields
         })
@@ -73,7 +73,7 @@ class TestErrorResponses:
         """Test policy validation error returns proper format."""
         client = TestClient(app)
         
-        response = client.post("/policy", json={
+        response = client.post("/v1/policy", json={
             "policy": {
                 "id": "test",
                 "rules": []  # Empty rules - should fail
@@ -91,7 +91,7 @@ class TestErrorResponses:
         client = TestClient(app)
         
         response = client.post(
-            "/signal",
+            "/v1/signal",
             data="invalid json{",
             headers={"Content-Type": "application/json"}
         )
@@ -102,7 +102,7 @@ class TestErrorResponses:
         """Test validation error for missing required field."""
         client = TestClient(app)
         
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test-svc"
             # Missing 'environment' field
         })
@@ -116,7 +116,7 @@ class TestErrorResponses:
         """Test validation error for wrong field type."""
         client = TestClient(app)
         
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test-svc",
             "environment": "test",
             "latency_ms": "not-a-number"  # Should be float
@@ -134,7 +134,7 @@ class TestHealthCheckErrors:
         """Test health check returns component statuses."""
         client = TestClient(app)
         
-        response = client.get("/healthz")
+        response = client.get("/v1/healthz")
         
         # Should succeed normally
         data = response.json()
@@ -147,7 +147,7 @@ class TestHealthCheckErrors:
         """Test health check includes timestamp."""
         client = TestClient(app)
         
-        response = client.get("/healthz")
+        response = client.get("/v1/healthz")
         data = response.json()
         
         assert "timestamp" in data
@@ -162,7 +162,7 @@ class TestErrorLogging:
         client = TestClient(app)
         
         # This should trigger a validation error
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test",
             "environment": "test",
             "latency_ms": -100  # Negative latency should fail validation
@@ -179,14 +179,14 @@ class TestErrorRecovery:
         client = TestClient(app)
         
         # First request with error
-        response1 = client.post("/signal", json={
+        response1 = client.post("/v1/signal", json={
             "service": "test",
             "latency_ms": "invalid"
         })
         assert response1.status_code == 422
         
         # Second valid request should work
-        response2 = client.post("/signal", json={
+        response2 = client.post("/v1/signal", json={
             "service": "test-svc",
             "environment": "test",
             "latency_ms": 100.0
@@ -197,7 +197,7 @@ class TestErrorRecovery:
         """Test handling multiple validation errors."""
         client = TestClient(app)
         
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "",  # Too short
             "environment": "",  # Too short
             "latency_ms": -1,  # Negative
@@ -217,7 +217,7 @@ class TestErrorDetailSuppression:
         """Test validation errors don't expose internal implementation."""
         client = TestClient(app)
         
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test"
         })
         
@@ -235,7 +235,7 @@ class TestConflictErrorDetails:
         """Test duplicate ID error includes helpful details."""
         client = TestClient(app)
         
-        response = client.post("/policy", json={
+        response = client.post("/v1/policy", json={
             "policy": {
                 "id": "test",
                 "rules": [
@@ -273,7 +273,7 @@ class TestRateLimitErrors:
         # Note: This test might be flaky depending on rate limit settings
         responses = []
         for _ in range(200):
-            response = client.get("/healthz")
+            response = client.get("/v1/healthz")
             responses.append(response.status_code)
         
         # At least one should be rate limited

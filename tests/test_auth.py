@@ -12,12 +12,12 @@ class TestAuthentication:
     
     def test_healthz_no_auth_required(self):
         """Health endpoint should not require authentication."""
-        response = client.get("/healthz")
+        response = client.get("/v1/healthz")
         assert response.status_code == 200
     
     def test_get_policy_no_auth_required(self):
         """Reading policy should not require authentication."""
-        response = client.get("/policy")
+        response = client.get("/v1/policy")
         assert response.status_code == 200
     
     def test_post_policy_without_admin_key_when_not_configured(self):
@@ -34,7 +34,7 @@ class TestAuthentication:
             }
         }
         # Without ADMIN_API_KEY env var, should succeed
-        response = client.post("/policy", json=policy)
+        response = client.post("/v1/policy", json=policy)
         # May be 200 or 401 depending on environment
         assert response.status_code in (200, 401)
     
@@ -46,7 +46,7 @@ class TestAuthentication:
             "latency_ms": 100.0,
             "error": False,
         }
-        response = client.post("/signal", json=signal)
+        response = client.post("/v1/signal", json=signal)
         assert response.status_code == 200
     
     def test_signal_endpoint_with_api_key(self):
@@ -58,19 +58,19 @@ class TestAuthentication:
             "error": False,
         }
         headers = {"X-API-Key": "aoc_test_key_1234567890abcdef"}
-        response = client.post("/signal", json=signal, headers=headers)
+        response = client.post("/v1/signal", json=signal, headers=headers)
         assert response.status_code == 200
     
     def test_generate_key_without_auth_fails(self):
         """API key generation should require admin authentication."""
-        response = client.post("/auth/generate-key")
+        response = client.post("/v1/auth/generate-key")
         # Should fail without admin key when ADMIN_API_KEY is set
         # Or succeed if ADMIN_API_KEY is not set (backward compatible)
         assert response.status_code in (200, 401)
     
     def test_config_endpoint_no_auth_required(self):
         """Config endpoint should not require authentication."""
-        response = client.get("/config/test-svc/test")
+        response = client.get("/v1/config/test-svc/test")
         assert response.status_code == 200
 
 
@@ -86,7 +86,7 @@ class TestAPIKeyValidation:
         }
         # Very short key - should work since API key is optional on /signal
         headers = {"X-API-Key": "short"}
-        response = client.post("/signal", json=signal, headers=headers)
+        response = client.post("/v1/signal", json=signal, headers=headers)
         # Optional auth means it won't fail, just won't be validated
         assert response.status_code == 200
 
@@ -107,11 +107,11 @@ class TestAdminEndpoints:
                 }]
             }
         }
-        response = client.post("/policy", json=policy)
+        response = client.post("/v1/policy", json=policy)
         # Either succeeds (no ADMIN_API_KEY set) or requires auth
         assert response.status_code in (200, 401, 403)
     
     def test_generate_key_requires_admin(self):
         """Key generation should require admin privileges."""
-        response = client.post("/auth/generate-key")
+        response = client.post("/v1/auth/generate-key")
         assert response.status_code in (200, 401, 403)

@@ -17,7 +17,7 @@ class TestHealthEndpoint:
     
     def test_healthz_returns_ok(self):
         """Health check should return ok status."""
-        response = client.get("/healthz")
+        response = client.get("/v1/healthz")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] in ["healthy", "degraded"]
@@ -25,7 +25,7 @@ class TestHealthEndpoint:
     
     def test_healthz_timestamp_format(self):
         """Health check timestamp should be ISO format."""
-        response = client.get("/healthz")
+        response = client.get("/v1/healthz")
         data = response.json()
         # Should be parseable as ISO datetime
         from datetime import datetime
@@ -38,7 +38,7 @@ class TestPolicyEndpoints:
     
     def test_get_policy_returns_current_policy(self):
         """GET /policy should return the current policy."""
-        response = client.get("/policy")
+        response = client.get("/v1/policy")
         assert response.status_code == 200
         data = response.json()
         assert "id" in data
@@ -47,7 +47,7 @@ class TestPolicyEndpoints:
     
     def test_get_policy_includes_rules(self):
         """GET /policy should include rule details."""
-        response = client.get("/policy")
+        response = client.get("/v1/policy")
         data = response.json()
         assert len(data["rules"]) > 0
         first_rule = data["rules"][0]
@@ -58,7 +58,7 @@ class TestPolicyEndpoints:
     
     def test_post_policy_updates_policy(self):
         """POST /policy should update the active policy."""
-        original = client.get("/policy").json()
+        original = client.get("/v1/policy").json()
         
         new_policy = {
             "id": "test-policy",
@@ -73,16 +73,16 @@ class TestPolicyEndpoints:
             ]
         }
         
-        response = client.post("/policy", json={"policy": new_policy})
+        response = client.post("/v1/policy", json={"policy": new_policy})
         assert response.status_code == 200
         assert response.json()["id"] == "test-policy"
         
         # Verify it was actually updated
-        current = client.get("/policy").json()
+        current = client.get("/v1/policy").json()
         assert current["id"] == "test-policy"
         
         # Restore original
-        client.post("/policy", json={"policy": original})
+        client.post("/v1/policy", json={"policy": original})
     
     def test_post_policy_with_missing_id(self):
         """POST /policy without required ID should return 422."""
@@ -98,7 +98,7 @@ class TestPolicyEndpoints:
             ]
         }
         
-        response = client.post("/policy", json={"policy": invalid_policy})
+        response = client.post("/v1/policy", json={"policy": invalid_policy})
         assert response.status_code == 422  # Validation error
 
 
@@ -107,7 +107,7 @@ class TestConfigEndpoint:
     
     def test_get_config_returns_effective_config(self):
         """GET /config should return effective configuration."""
-        response = client.get("/config/test-service/prod")
+        response = client.get("/v1/config/test-service/prod")
         assert response.status_code == 200
         data = response.json()
         assert data["service"] == "test-service"
@@ -119,8 +119,8 @@ class TestConfigEndpoint:
     def test_get_config_different_services(self):
         """Config for different services should work independently."""
         # Get config for multiple services
-        response1 = client.get("/config/service-a/prod")
-        response2 = client.get("/config/service-b/prod")
+        response1 = client.get("/v1/config/service-a/prod")
+        response2 = client.get("/v1/config/service-b/prod")
         
         assert response1.status_code == 200
         assert response2.status_code == 200
@@ -137,7 +137,7 @@ class TestSignalEndpoint:
     
     def test_signal_returns_config(self):
         """POST /signal should return effective config."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test",
             "environment": "prod",
             "latency_ms": 150.0,
@@ -150,7 +150,7 @@ class TestSignalEndpoint:
     
     def test_signal_with_minimal_data(self):
         """Signal with only required fields should work."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "minimal",
             "environment": "test"
         })
@@ -158,7 +158,7 @@ class TestSignalEndpoint:
     
     def test_signal_with_attributes(self):
         """Signal with custom attributes should be accepted."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "attr-test",
             "environment": "test",
             "latency_ms": 100.0,
@@ -180,7 +180,7 @@ class TestSignalEndpoint:
         
         # Send high-latency signals
         for i in range(30):
-            client.post("/signal", json={
+            client.post("/v1/signal", json={
                 "service": service,
                 "environment": env,
                 "latency_ms": 600.0,
@@ -201,7 +201,7 @@ class TestErrorResponses:
     def test_invalid_json_returns_422(self):
         """Invalid JSON should return 422."""
         response = client.post(
-            "/signal",
+            "/v1/signal",
             data="not json",
             headers={"Content-Type": "application/json"}
         )
@@ -209,7 +209,7 @@ class TestErrorResponses:
     
     def test_missing_required_field_returns_422(self):
         """Missing required field should return 422."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test"
             # Missing environment
         })
@@ -228,7 +228,7 @@ class TestConcurrentRequests:
         """Signals from different services should be isolated."""
         # Send signals to service A
         for i in range(10):
-            client.post("/signal", json={
+            client.post("/v1/signal", json={
                 "service": "service-a",
                 "environment": "test",
                 "latency_ms": 1000.0,
@@ -237,7 +237,7 @@ class TestConcurrentRequests:
         
         # Send signals to service B
         for i in range(10):
-            client.post("/signal", json={
+            client.post("/v1/signal", json={
                 "service": "service-b",
                 "environment": "test",
                 "latency_ms": 50.0,
@@ -245,8 +245,8 @@ class TestConcurrentRequests:
             })
         
         # Configs should be independent
-        config_a = client.get("/config/service-a/test").json()
-        config_b = client.get("/config/service-b/test").json()
+        config_a = client.get("/v1/config/service-a/test").json()
+        config_b = client.get("/v1/config/service-b/test").json()
         
         # Service A should have elevated settings
         # Service B should have normal settings
@@ -260,7 +260,7 @@ class TestConcurrentRequests:
         
         # Send signals to prod
         for i in range(10):
-            client.post("/signal", json={
+            client.post("/v1/signal", json={
                 "service": service,
                 "environment": "prod",
                 "latency_ms": 1000.0,
@@ -269,7 +269,7 @@ class TestConcurrentRequests:
         
         # Send signals to staging
         for i in range(10):
-            client.post("/signal", json={
+            client.post("/v1/signal", json={
                 "service": service,
                 "environment": "staging",
                 "latency_ms": 50.0,
@@ -289,7 +289,7 @@ class TestDataTypes:
     
     def test_float_latency_accepted(self):
         """Latency as float should be accepted."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test",
             "environment": "test",
             "latency_ms": 123.456
@@ -298,7 +298,7 @@ class TestDataTypes:
     
     def test_integer_latency_accepted(self):
         """Latency as integer should be accepted."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test",
             "environment": "test",
             "latency_ms": 100
@@ -307,7 +307,7 @@ class TestDataTypes:
     
     def test_null_latency_accepted(self):
         """Null latency should be accepted."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test",
             "environment": "test",
             "latency_ms": None
@@ -316,14 +316,14 @@ class TestDataTypes:
     
     def test_boolean_error_field(self):
         """Error field should accept boolean."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test",
             "environment": "test",
             "error": True
         })
         assert response.status_code == 200
         
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "test",
             "environment": "test",
             "error": False

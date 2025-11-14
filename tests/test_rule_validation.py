@@ -251,7 +251,7 @@ class TestValidationAPI:
         """Test /policy/validate endpoint with valid policy."""
         client = TestClient(app)
         
-        response = client.post("/policy/validate", json={
+        response = client.post("/v1/policy/validate", json={
             "policy": {
                 "id": "test-policy",
                 "rules": [
@@ -275,7 +275,7 @@ class TestValidationAPI:
         """Test validation detects duplicate rule IDs."""
         client = TestClient(app)
         
-        response = client.post("/policy/validate", json={
+        response = client.post("/v1/policy/validate", json={
             "policy": {
                 "id": "test-policy",
                 "rules": [
@@ -304,7 +304,7 @@ class TestValidationAPI:
         """Test validation shows warnings."""
         client = TestClient(app)
         
-        response = client.post("/policy/validate", json={
+        response = client.post("/v1/policy/validate", json={
             "policy": {
                 "id": "test-policy",
                 "rules": [
@@ -333,7 +333,7 @@ class TestPolicyUpdateWithValidation:
         """Test that policy update rejects duplicate IDs."""
         client = TestClient(app)
         
-        response = client.post("/policy", json={
+        response = client.post("/v1/policy", json={
             "policy": {
                 "id": "bad-policy",
                 "rules": [
@@ -361,7 +361,7 @@ class TestPolicyUpdateWithValidation:
         """Test that policy update allows warnings but logs them."""
         client = TestClient(app)
         
-        response = client.post("/policy", json={
+        response = client.post("/v1/policy", json={
             "policy": {
                 "id": "warning-policy",
                 "rules": [

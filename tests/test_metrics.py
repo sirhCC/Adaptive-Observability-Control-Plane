@@ -18,14 +18,14 @@ class TestMetricsEndpoint:
     def test_metrics_endpoint_exists(self):
         """Test that /metrics endpoint is available."""
         client = TestClient(app)
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/plain")
     
     def test_metrics_endpoint_returns_prometheus_format(self):
         """Test that metrics are in Prometheus format."""
         client = TestClient(app)
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         content = response.text
         
         # Check for standard Prometheus metric prefixes
@@ -36,14 +36,14 @@ class TestMetricsEndpoint:
         client = TestClient(app)
         
         # Generate some activity to create metrics
-        client.post("/signal", json={
+        client.post("/v1/signal", json={
             "service": "test-svc",
             "environment": "test",
             "latency_ms": 100,
             "error": False
         })
         
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         content = response.text
         
         # Check for our custom metrics
@@ -56,14 +56,14 @@ class TestMetricsEndpoint:
         
         # Ingest multiple signals
         for i in range(5):
-            client.post("/signal", json={
+            client.post("/v1/signal", json={
                 "service": "metrics-test",
                 "environment": "prod",
                 "latency_ms": 50.0 * (i + 1),
                 "error": i % 2 == 0
             })
         
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         content = response.text
         
         # Verify signal metrics exist
@@ -76,9 +76,9 @@ class TestMetricsEndpoint:
         client = TestClient(app)
         
         # Trigger policy evaluation via config endpoint
-        client.get("/config/eval-test/dev")
+        client.get("/v1/config/eval-test/dev")
         
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         content = response.text
         
         # Verify evaluation metrics
@@ -90,14 +90,14 @@ class TestMetricsEndpoint:
         client = TestClient(app)
         
         # Send error signal
-        client.post("/signal", json={
+        client.post("/v1/signal", json={
             "service": "error-svc",
             "environment": "staging",
             "latency_ms": 200,
             "error": True
         })
         
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         content = response.text
         
         # Verify error tracking
@@ -109,13 +109,13 @@ class TestMetricsEndpoint:
         
         # Add signals to buffer
         for i in range(3):
-            client.post("/signal", json={
+            client.post("/v1/signal", json={
                 "service": "buffer-test",
                 "environment": "test",
                 "latency_ms": 100
             })
         
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         content = response.text
         
         # Verify buffer size metric
@@ -131,14 +131,14 @@ class TestMetricsAccuracy:
         
         # Send 3 signals
         for _ in range(3):
-            client.post("/signal", json={
+            client.post("/v1/signal", json={
                 "service": "counter-test",
                 "environment": "dev",
                 "latency_ms": 50
             })
         
         # Get metrics
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         content = response.text
         
         # Find the counter line for our service
@@ -150,9 +150,9 @@ class TestMetricsAccuracy:
         client = TestClient(app)
         
         # Trigger evaluation
-        client.get("/config/histogram-test/prod")
+        client.get("/v1/config/histogram-test/prod")
         
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         content = response.text
         
         # Check histogram components
@@ -168,12 +168,12 @@ class TestMetricsWithPolicy:
         client = TestClient(app)
         
         # First get current policy
-        get_response = client.get("/policy")
+        get_response = client.get("/v1/policy")
         policy = get_response.json()
         
         # Try to update policy (will need admin key in real scenario)
         # For test without admin key, we expect rejection but metrics should track validation
-        post_response = client.post("/policy", json={
+        post_response = client.post("/v1/policy", json={
             "policy": {
                 "id": "test-policy",
                 "rules": []  # Invalid - no rules
@@ -181,7 +181,7 @@ class TestMetricsWithPolicy:
         })
         
         # Get metrics
-        metrics_response = client.get("/metrics")
+        metrics_response = client.get("/v1/metrics")
         content = metrics_response.text
         
         # Should track validation error
@@ -196,9 +196,9 @@ class TestHTTPMetrics:
         client = TestClient(app)
         
         # Make a request
-        client.get("/healthz")
+        client.get("/v1/healthz")
         
-        response = client.get("/metrics")
+        response = client.get("/v1/metrics")
         content = response.text
         
         # Check for standard FastAPI instrumentation metrics

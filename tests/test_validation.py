@@ -17,7 +17,7 @@ class TestInputValidation:
     
     def test_valid_signal_accepted(self):
         """Valid signal should be accepted."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "my-service",
             "environment": "prod",
             "latency_ms": 100.5,
@@ -28,7 +28,7 @@ class TestInputValidation:
     
     def test_invalid_service_name_rejected(self):
         """Service name with invalid characters should be rejected."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "my service!",  # spaces and special chars not allowed
             "environment": "prod",
             "latency_ms": 100.0
@@ -37,7 +37,7 @@ class TestInputValidation:
     
     def test_invalid_environment_name_rejected(self):
         """Environment name with invalid characters should be rejected."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "my-service",
             "environment": "prod@123",  # @ not allowed
             "latency_ms": 100.0
@@ -46,7 +46,7 @@ class TestInputValidation:
     
     def test_service_name_too_long_rejected(self):
         """Service name exceeding max length should be rejected."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "a" * 65,  # 65 chars, max is 64
             "environment": "prod",
             "latency_ms": 100.0
@@ -55,7 +55,7 @@ class TestInputValidation:
     
     def test_negative_latency_rejected(self):
         """Negative latency should be rejected."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "my-service",
             "environment": "prod",
             "latency_ms": -50.0
@@ -64,7 +64,7 @@ class TestInputValidation:
     
     def test_excessive_latency_rejected(self):
         """Unrealistically high latency should be rejected."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "my-service",
             "environment": "prod",
             "latency_ms": 10_000_000.0  # 10 million ms = ~3 hours
@@ -73,7 +73,7 @@ class TestInputValidation:
     
     def test_too_many_attrs_rejected(self):
         """Too many attributes should be rejected."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "my-service",
             "environment": "prod",
             "attrs": {f"key{i}": "value" for i in range(51)}  # max is 50
@@ -82,7 +82,7 @@ class TestInputValidation:
     
     def test_oversized_attr_key_rejected(self):
         """Attribute key exceeding max length should be rejected."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "my-service",
             "environment": "prod",
             "attrs": {"a" * 129: "value"}  # 129 chars, max is 128
@@ -91,7 +91,7 @@ class TestInputValidation:
     
     def test_oversized_attr_value_rejected(self):
         """Attribute value exceeding max length should be rejected."""
-        response = client.post("/signal", json={
+        response = client.post("/v1/signal", json={
             "service": "my-service",
             "environment": "prod",
             "attrs": {"key": "v" * 1025}  # 1025 chars, max is 1024
@@ -104,18 +104,18 @@ class TestConfigEndpointValidation:
     
     def test_valid_config_request(self):
         """Valid config request should succeed."""
-        response = client.get("/config/my-service/prod")
+        response = client.get("/v1/config/my-service/prod")
         assert response.status_code == 200
         assert response.json()["service"] == "my-service"
     
     def test_invalid_service_name_in_path_rejected(self):
         """Invalid service name in path should be rejected."""
-        response = client.get("/config/my service/prod")
+        response = client.get("/v1/config/my service/prod")
         assert response.status_code == 422 or response.status_code == 400
     
     def test_service_name_too_long_in_path_rejected(self):
         """Service name exceeding max length in path should be rejected."""
-        response = client.get(f"/config/{'a' * 65}/prod")
+        response = client.get(f"/v1/config/{'a' * 65}/prod")
         assert response.status_code == 400
 
 
@@ -135,7 +135,7 @@ class TestBufferManagement:
         
         # Send a few signals
         for i in range(5):
-            response = test_client.post("/signal", json={
+            response = test_client.post("/v1/signal", json={
                 "service": service,
                 "environment": env,
                 "latency_ms": float(i * 10),
@@ -159,7 +159,7 @@ class TestPolicyValidation:
         """Policy with no rules should be rejected."""
         # Create fresh client to avoid rate limiting
         test_client = TestClient(app)
-        response = test_client.post("/policy", json={
+        response = test_client.post("/v1/policy", json={
             "policy": {
                 "id": "test",
                 "rules": []
@@ -175,7 +175,7 @@ class TestPolicyValidation:
         """
         # Create fresh client to avoid rate limiting
         test_client = TestClient(app)
-        response = test_client.post("/policy", json={
+        response = test_client.post("/v1/policy", json={
             "policy": {
                 "id": "test",
                 "rules": [
@@ -207,7 +207,7 @@ class TestPolicyValidation:
         """
         # Create fresh client to avoid rate limiting
         test_client = TestClient(app)
-        response = test_client.post("/policy", json={
+        response = test_client.post("/v1/policy", json={
             "policy": {
                 "id": "test",
                 "rules": [
@@ -236,6 +236,6 @@ class TestRateLimiting:
     
     def test_healthz_works(self):
         """Health endpoint should work."""
-        response = client.get("/healthz")
+        response = client.get("/v1/healthz")
         assert response.status_code == 200
         assert response.json()["status"] in ["healthy", "degraded"]

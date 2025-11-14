@@ -12,6 +12,7 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 from prometheus_fastapi_instrumentator import Instrumentator
+from fastapi import APIRouter
 
 from control_plane.database import init_db, get_db
 from control_plane.repository import PolicyRepository, SignalRepository
@@ -32,12 +33,15 @@ VALID_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 
 # Rate limiter setup
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="Adaptive Observability Control Plane", version="0.1.0")
+app = FastAPI(title="Adaptive Observability Control Plane", version="1.0.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Register custom exception handlers
 register_exception_handlers(app)
+
+# Create v1 API router
+v1_router = APIRouter(prefix="/v1", tags=["v1"])
 
 
 # --- Models
@@ -365,7 +369,7 @@ class UpsertPolicy(BaseModel):
     policy: Policy
 
 
-@app.get("/healthz")
+@v1_router.get("/healthz")
 async def healthz(db: AsyncSession = Depends(get_db)):
     """Health check endpoint with component status."""
     health_status = {
@@ -405,7 +409,7 @@ async def healthz(db: AsyncSession = Depends(get_db)):
     return JSONResponse(content=health_status, status_code=status_code)
 
 
-@app.get("/metrics")
+@v1_router.get("/metrics")
 async def metrics():
     """Prometheus metrics endpoint."""
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
@@ -415,7 +419,7 @@ async def metrics():
     return Response(content=metrics_data, media_type=CONTENT_TYPE_LATEST)
 
 
-@app.post("/auth/generate-key")
+@v1_router.post("/auth/generate-key")
 @limiter.limit("5/minute")
 async def generate_key(
     request: Request,
@@ -433,14 +437,14 @@ async def generate_key(
     }
 
 
-@app.get("/policy", response_model=Policy)
+@v1_router.get("/policy", response_model=Policy)
 @limiter.limit("50/minute")
 async def get_policy(request: Request):
     """Get the current policy configuration."""
     return POLICY
 
 
-@app.post("/policy/validate")
+@v1_router.post("/policy/validate")
 @limiter.limit("20/minute")
 async def validate_policy(request: Request, req: UpsertPolicy):
     """Validate a policy configuration without applying it."""
@@ -465,7 +469,7 @@ async def validate_policy(request: Request, req: UpsertPolicy):
     }
 
 
-@app.post("/policy", response_model=Policy)
+@v1_router.post("/policy", response_model=Policy)
 @limiter.limit("10/minute")  # Strict limit on policy updates
 async def set_policy(
     request: Request,
@@ -535,7 +539,7 @@ class SignalIn(BaseModel):
         return v
 
 
-@app.post("/signal", response_model=EffectiveConfig)
+@v1_router.post("/signal", response_model=EffectiveConfig)
 @limiter.limit("100/minute")  # 100 requests per minute per IP
 async def ingest_signal(
     request: Request,
@@ -571,7 +575,7 @@ async def ingest_signal(
     return evaluate(s.service, s.environment)
 
 
-@app.get("/config/{service}/{environment}", response_model=EffectiveConfig)
+@v1_router.get("/config/{service}/{environment}", response_model=EffectiveConfig)
 @limiter.limit("200/minute")  # 200 requests per minute per IP
 async def get_config(request: Request, service: str, environment: str):
     """Get effective configuration for a service and environment."""
@@ -584,3 +588,7 @@ async def get_config(request: Request, service: str, environment: str):
             detail="Service and environment must contain only alphanumeric, underscore, and hyphen characters"
         )
     return evaluate(service, environment)
+
+
+# Include v1 API router (must be after all route definitions)
+app.include_router(v1_router)

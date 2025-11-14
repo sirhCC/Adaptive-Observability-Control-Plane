@@ -13,7 +13,7 @@ ENV = os.getenv("ENV", "prod")
 
 async def send_signal(client: httpx.AsyncClient, latency_ms: float, error: bool):
     resp = await client.post(
-        f"{CP_URL}/signal",
+        f"{CP_URL}/v1/signal",
         json={
             "service": SERVICE,
             "environment": ENV,
@@ -28,7 +28,7 @@ async def send_signal(client: httpx.AsyncClient, latency_ms: float, error: bool)
 
 
 async def get_config(client: httpx.AsyncClient):
-    resp = await client.get(f"{CP_URL}/config/{SERVICE}/{ENV}", timeout=5.0)
+    resp = await client.get(f"{CP_URL}/v1/config/{SERVICE}/{ENV}", timeout=5.0)
     resp.raise_for_status()
     return resp.json()
 
