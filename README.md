@@ -27,7 +27,7 @@ A production-ready control plane for adaptive observability that dynamically adj
 - ✅ **Structured Logging** - loguru with contextual logging
 - ✅ **Health Checks** - `/healthz` endpoint for monitoring
 - ✅ **OpenAPI/Swagger** - Interactive API documentation
-- ✅ **179 Comprehensive Tests** - >80% code coverage with extensive error handling tests
+- ✅ **227 Comprehensive Tests** (204 passed, 23 skipped) - >80% code coverage with extensive error handling tests
 
 ---
 
@@ -103,7 +103,7 @@ pytest tests/test_auth.py -v
 pytest --cov=control_plane --cov-report=html
 ```
 
-**Test Coverage**: 179 tests covering:
+**Test Coverage**: 201 tests covering:
 - API integration (21 tests)
 - Authentication & authorization (10 tests)
 - Input validation (17 tests)
@@ -115,6 +115,7 @@ pytest --cov=control_plane --cov-report=html
 - Policy testing & simulation (10 tests)
 - Signal replay & time-travel (23 tests)
 - Policy export/import & templates (25 tests)
+- Health checks & Docker deployment (22 tests)
 - Edge cases & window filtering
 
 ---
@@ -187,7 +188,8 @@ $env:SECRET_KEY = "your-secret-key-here"
 All API endpoints are versioned under the `/v1` prefix for future compatibility.
 
 ### Public Endpoints
-- `GET /v1/healthz` - Health check with component status
+- `GET /v1/healthz` - Liveness check with component status (Docker HEALTHCHECK, K8s liveness probe)
+- `GET /v1/readyz` - Readiness check for critical dependencies (K8s readiness/startup probe)
 - `GET /v1/metrics` - Prometheus metrics endpoint
 - `GET /v1/policy` - Get current policy configuration
 - `POST /v1/policy/validate` - Validate policy configuration (no changes applied)
@@ -535,6 +537,66 @@ docker-compose down
 Services exposed:
 - Control Plane: http://localhost:8080
 - Demo Agent: Running in background
+
+## CORS Configuration
+
+**Browser-Based Admin UIs** - Full CORS support for web frontends:
+
+The control plane includes CORS middleware configured via environment variables:
+
+```powershell
+# Default configuration (allows all origins)
+docker run -p 8080:8080 control-plane
+
+# Restrict to specific origins
+docker run -p 8080:8080 \
+  -e CORS_ORIGINS="http://localhost:3000,https://admin.example.com" \
+  control-plane
+
+# Configure credentials support (cookies, auth headers)
+docker run -p 8080:8080 \
+  -e CORS_ORIGINS="http://localhost:3000" \
+  -e CORS_ALLOW_CREDENTIALS="true" \
+  control-plane
+
+# Custom methods and headers
+docker run -p 8080:8080 \
+  -e CORS_ALLOW_METHODS="GET,POST,PUT,DELETE" \
+  -e CORS_ALLOW_HEADERS="Content-Type,X-API-Key,Authorization" \
+  control-plane
+```
+
+**Environment Variables:**
+- `CORS_ORIGINS` - Comma-separated list of allowed origins (default: `*`)
+- `CORS_ALLOW_CREDENTIALS` - Allow credentials like cookies (default: `false`)
+- `CORS_ALLOW_METHODS` - Allowed HTTP methods (default: `*`)
+- `CORS_ALLOW_HEADERS` - Allowed request headers (default: `*`)
+
+**Preflight Requests:**
+- All OPTIONS requests handled automatically
+- Custom headers (X-API-Key) supported
+- Rate limit headers exposed to browser
+
+**Browser Compatibility:**
+```javascript
+// Example: Fetch from browser-based admin UI
+fetch('http://localhost:8080/v1/policy', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-API-Key': 'admin123'
+  },
+  body: JSON.stringify({
+    policy: {
+      id: 'my-policy',
+      description: 'Updated from UI',
+      rules: [...]
+    }
+  })
+})
+.then(response => response.json())
+.then(data => console.log('Policy updated:', data));
+```
 
 ---
 

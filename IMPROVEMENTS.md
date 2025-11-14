@@ -212,24 +212,53 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - [x] Comprehensive tests (25 tests, all passing)
 - [x] Documentation updated in README.md
 
-### 13. Docker Health Checks
-**Status:** Not Started  
+### 13. ✅ Docker Health Checks
+**Status:** Completed  
 **Impact:** Deployment
 
-- [ ] Add HEALTHCHECK to Dockerfiles
-- [ ] Implement `/healthz` liveness check
-- [ ] Implement `/readyz` readiness check (DB connectivity)
-- [ ] Add startup probes for Kubernetes
-- [ ] Add dependency health checks
+- [x] Add HEALTHCHECK to Dockerfiles
+  - Control plane Dockerfile includes HEALTHCHECK directive
+  - 30s interval, 5s timeout, 3 retries, 10s start period
+- [x] Implement `/v1/healthz` liveness check
+  - Returns 200 when healthy, 503 when degraded
+  - Checks database connectivity and signal buffer status
+  - Suitable for Docker HEALTHCHECK and K8s liveness probe
+- [x] Implement `/v1/readyz` readiness check (DB connectivity)
+  - Returns 200 when ready, 503 when not ready
+  - Validates database connection and policy initialization
+  - Suitable for K8s readiness and startup probes
+- [x] Add startup probes for Kubernetes
+  - Example K8s configuration with all probe types documented
+- [x] Add dependency health checks
+  - Database connectivity validation
+  - Policy initialization check
+  - Signal buffer status monitoring
+- [x] Update docker-compose.yml with health checks
+  - Agent waits for control plane to be healthy (depends_on with condition: service_healthy)
+- [x] Comprehensive tests (22 tests, all passing)
+- [x] Documentation with K8s examples
 
-### 14. CORS Configuration
-**Status:** Not Started  
+### 14. ✅ CORS Configuration
+**Status:** Completed  
 **Impact:** Web Integration
 
-- [ ] Add CORS middleware
-- [ ] Make CORS origins configurable
-- [ ] Support browser-based admin UIs
-- [ ] Add preflight request handling
+- [x] Add CORS middleware
+  - CORSMiddleware integrated with FastAPI
+  - Proper ordering before other middleware
+- [x] Make CORS origins configurable
+  - `CORS_ORIGINS` - Comma-separated origins (default: `*`)
+  - `CORS_ALLOW_CREDENTIALS` - Support cookies/auth (default: `false`)
+  - `CORS_ALLOW_METHODS` - Allowed HTTP methods (default: `*`)
+  - `CORS_ALLOW_HEADERS` - Allowed headers (default: `*`)
+- [x] Support browser-based admin UIs
+  - Full browser compatibility
+  - Custom headers (X-API-Key) supported
+  - Rate limit headers exposed
+- [x] Add preflight request handling
+  - All OPTIONS requests handled automatically
+  - Preflight works without authentication
+- [x] Comprehensive tests (26 tests, all passing)
+- [x] Documentation with browser examples
 
 ### 15. Graceful Shutdown
 **Status:** Not Started  

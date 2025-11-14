@@ -8,6 +8,7 @@ import yaml
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import Response
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -34,11 +35,27 @@ MAX_SERVICE_NAME_LEN = 64
 MAX_ENV_NAME_LEN = 32
 VALID_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 
+# CORS Configuration
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
+CORS_ALLOW_METHODS = os.getenv("CORS_ALLOW_METHODS", "*").split(",")
+CORS_ALLOW_HEADERS = os.getenv("CORS_ALLOW_HEADERS", "*").split(",")
+
 # Rate limiter setup
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Adaptive Observability Control Plane", version="1.0.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS middleware - Add before other middleware for proper preflight handling
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in CORS_ORIGINS],
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
+    allow_methods=[method.strip() for method in CORS_ALLOW_METHODS],
+    allow_headers=[header.strip() for header in CORS_ALLOW_HEADERS],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+)
 
 # Register custom exception handlers
 register_exception_handlers(app)
@@ -438,6 +455,63 @@ async def healthz(db: AsyncSession = Depends(get_db)):
     
     from fastapi.responses import JSONResponse
     return JSONResponse(content=health_status, status_code=status_code)
+
+
+@v1_router.get("/readyz")
+async def readyz(db: AsyncSession = Depends(get_db)):
+    """
+    Readiness check endpoint for Kubernetes/Docker.
+    
+    Returns 200 if service is ready to accept traffic, 503 otherwise.
+    Checks critical dependencies like database connectivity.
+    """
+    readiness_status = {
+        "ready": True,
+        "timestamp": _now().isoformat(),
+        "checks": {}
+    }
+    
+    # Check database connectivity (critical for readiness)
+    try:
+        from sqlalchemy import text
+        await db.execute(text("SELECT 1"))
+        readiness_status["checks"]["database"] = {
+            "status": "ready",
+            "message": "Database connection successful"
+        }
+    except Exception as e:
+        readiness_status["checks"]["database"] = {
+            "status": "not_ready",
+            "message": f"Database connection failed: {str(e)}"
+        }
+        readiness_status["ready"] = False
+        logger.error(f"Database readiness check failed: {e}")
+    
+    # Check if policy is initialized
+    try:
+        if POLICY and POLICY.rules:
+            readiness_status["checks"]["policy"] = {
+                "status": "ready",
+                "message": f"Policy initialized with {len(POLICY.rules)} rules"
+            }
+        else:
+            readiness_status["checks"]["policy"] = {
+                "status": "ready",
+                "message": "Default policy active"
+            }
+    except Exception as e:
+        readiness_status["checks"]["policy"] = {
+            "status": "not_ready",
+            "message": f"Policy check failed: {str(e)}"
+        }
+        readiness_status["ready"] = False
+        logger.error(f"Policy readiness check failed: {e}")
+    
+    # Set HTTP status code based on readiness
+    status_code = 200 if readiness_status["ready"] else 503
+    
+    from fastapi.responses import JSONResponse
+    return JSONResponse(content=readiness_status, status_code=status_code)
 
 
 @v1_router.get("/metrics")

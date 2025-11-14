@@ -4,10 +4,17 @@ services:
     build: ./control_plane
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; import sys; req = urllib.request.Request('http://localhost:8080/v1/healthz'); resp = urllib.request.urlopen(req); sys.exit(0 if resp.status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
   agent-demo:
     build: ./agent_demo
     depends_on:
-      - control-plane
+      control-plane:
+        condition: service_healthy
     environment:
       - CP_URL=http://control-plane:8080
       - SERVICE=checkout
