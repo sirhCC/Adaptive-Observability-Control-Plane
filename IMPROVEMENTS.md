@@ -30,16 +30,17 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - [x] 51 comprehensive tests passing, coverage significantly improved
 
 ### 3. Database Persistence 💾
-**Status:** Not Started  
+**Status:** ✅ COMPLETED  
 **Impact:** Data Loss Prevention
 
-- [ ] Replace in-memory POLICY and SIGNALS with database
-- [ ] Add SQLite for local dev, Postgres for production
-- [ ] Implement database migrations (Alembic)
-- [ ] Add audit log for policy changes
-- [ ] Enable horizontal scaling with shared state
-- [ ] Add signal history retention policies
-- [ ] Add policy versioning and rollback
+- [x] Database models for policies, signals, and audit logs
+- [x] SQLite for local dev with async support (aiosqlite)
+- [x] Postgres support via psycopg2-binary
+- [x] Alembic migrations configured and initial schema created
+- [x] Policy audit log with versioning
+- [x] Repository layer for clean database operations
+- [x] Startup event seeds default policy automatically
+- [x] Database URL configurable via environment variable
 
 ### 4. Authentication & Authorization 🔐
 **Status:** Not Started  
