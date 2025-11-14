@@ -13,6 +13,7 @@ from loguru import logger
 
 from control_plane.database import init_db, get_db
 from control_plane.repository import PolicyRepository, SignalRepository
+from control_plane.auth import require_admin_key, get_api_key, get_optional_api_key
 
 # Configuration
 MAX_SIGNALS_PER_SERVICE = 10000  # Max signals to keep per (service, env)
@@ -259,6 +260,24 @@ async def healthz():
     return {"ok": True, "ts": _now().isoformat()}
 
 
+@app.post("/auth/generate-key")
+@limiter.limit("5/minute")
+async def generate_key(
+    request: Request,
+    admin: str = Depends(require_admin_key),
+):
+    """Generate a new API key for agent authentication. Requires admin access."""
+    from control_plane.auth import generate_api_key
+    
+    new_key = generate_api_key()
+    logger.info(f"Generated new API key: {new_key[:12]}...")
+    return {
+        "api_key": new_key,
+        "created_at": _now().isoformat(),
+        "note": "Store this key securely - it won't be shown again",
+    }
+
+
 @app.get("/policy", response_model=Policy)
 @limiter.limit("50/minute")
 async def get_policy(request: Request):
@@ -268,8 +287,12 @@ async def get_policy(request: Request):
 
 @app.post("/policy", response_model=Policy)
 @limiter.limit("10/minute")  # Strict limit on policy updates
-async def set_policy(request: Request, req: UpsertPolicy):
-    """Update the policy configuration. Restricted endpoint."""
+async def set_policy(
+    request: Request,
+    req: UpsertPolicy,
+    admin: str = Depends(require_admin_key),
+):
+    """Update the policy configuration. Requires admin API key."""
     global POLICY
     # Validate policy has at least one rule
     if not req.policy.rules:
@@ -307,8 +330,16 @@ class SignalIn(BaseModel):
 
 @app.post("/signal", response_model=EffectiveConfig)
 @limiter.limit("100/minute")  # 100 requests per minute per IP
-async def ingest_signal(request: Request, sig: SignalIn):
-    """Ingest telemetry signal and return effective configuration."""
+async def ingest_signal(
+    request: Request,
+    sig: SignalIn,
+    api_key: Optional[str] = Depends(get_optional_api_key),
+):
+    """Ingest telemetry signal and return effective configuration. API key recommended."""
+    # Log API key usage for monitoring
+    if api_key:
+        logger.debug(f"Signal from authenticated service: {sig.service}")
+    
     s = Signal(
         service=sig.service,
         environment=sig.environment,
