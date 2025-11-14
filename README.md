@@ -103,13 +103,14 @@ pytest tests/test_auth.py -v
 pytest --cov=control_plane --cov-report=html
 ```
 
-**Test Coverage**: 86 tests covering:
+**Test Coverage**: 103 tests covering:
 - API integration (21 tests)
 - Authentication & authorization (10 tests)
 - Input validation (17 tests)
 - Rule engine logic (11 tests)
 - Prometheus metrics (11 tests)
 - Advanced aggregations (14 tests)
+- Rule conflict detection (17 tests)
 - Edge cases & window filtering
 
 ---
@@ -176,6 +177,7 @@ $env:SECRET_KEY = "your-secret-key-here"
 - `GET /healthz` - Health check
 - `GET /metrics` - Prometheus metrics endpoint
 - `GET /policy` - Get current policy configuration
+- `POST /policy/validate` - Validate policy configuration (no changes applied)
 - `GET /config/{service}/{environment}` - Get effective config for a service
 - `POST /signal` - Ingest telemetry signal (optional API key)
 
@@ -336,7 +338,6 @@ See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the complete roadmap.
 None - Item #5 complete!
 
 ### 📋 Planned
-- Rule conflict detection and warnings
 - API versioning
 - Multi-tenancy support
 - OpenTelemetry Collector integration

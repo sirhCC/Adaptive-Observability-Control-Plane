@@ -101,15 +101,20 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - [ ] Support custom percentiles via API (future enhancement)
 
 ### 7. Rule Conflict Detection & Warnings
-**Status:** Not Started  
+**Status:** ✅ COMPLETED  
 **Impact:** User Experience
 
-- [ ] Detect when multiple rules match and warn users
-- [ ] Validate rule priorities make logical sense
-- [ ] Warn when rules will never match (impossible conditions)
-- [ ] Detect overlapping/conflicting actions
-- [ ] Add policy validation endpoint before applying
-- [ ] Show "effective rules" that would apply to test signals
+- [x] Detect overlapping rules with same priority
+- [x] Validate rule priorities and scope overlaps
+- [x] Warn when rules may never fire due to earlier 'always' rules
+- [x] Detect duplicate rule IDs (blocks update)
+- [x] Detect 'always' conditions mixed with other conditions
+- [x] Add `/policy/validate` endpoint for pre-flight validation
+- [x] Provide actionable suggestions for resolving conflicts
+- [x] Integrated validation in policy update endpoint
+- [x] Severity levels: error (blocks), warning (logs), info
+- [x] 17 comprehensive tests for conflict detection
+- [ ] Show "effective rules" for test signals (future enhancement)
 
 ### 8. Better Error Handling
 **Status:** Not Started  
