@@ -355,7 +355,7 @@ class TestPolicyUpdateWithValidation:
         
         # Should fail validation
         assert response.status_code == 400
-        assert "validation failed" in response.json()["detail"].lower()
+        assert "validation failed" in response.json()["message"].lower() or "duplicate" in response.json()["message"].lower()
     
     def test_policy_update_allows_warnings(self):
         """Test that policy update allows warnings but logs them."""

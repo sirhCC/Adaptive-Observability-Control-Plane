@@ -17,6 +17,12 @@ from control_plane.database import init_db, get_db
 from control_plane.repository import PolicyRepository, SignalRepository
 from control_plane.auth import require_admin_key, get_api_key, get_optional_api_key
 from control_plane import metrics as prom_metrics
+from control_plane.exceptions import (
+    register_exception_handlers,
+    PolicyValidationError,
+    SignalProcessingError,
+    DatabaseError
+)
 
 # Configuration
 MAX_SIGNALS_PER_SERVICE = 10000  # Max signals to keep per (service, env)
@@ -29,6 +35,9 @@ limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Adaptive Observability Control Plane", version="0.1.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Register custom exception handlers
+register_exception_handlers(app)
 
 
 # --- Models
@@ -357,8 +366,43 @@ class UpsertPolicy(BaseModel):
 
 
 @app.get("/healthz")
-async def healthz():
-    return {"ok": True, "ts": _now().isoformat()}
+async def healthz(db: AsyncSession = Depends(get_db)):
+    """Health check endpoint with component status."""
+    health_status = {
+        "status": "healthy",
+        "timestamp": _now().isoformat(),
+        "components": {}
+    }
+    
+    # Check database connectivity
+    try:
+        # Simple query to verify database is accessible
+        from sqlalchemy import text
+        await db.execute(text("SELECT 1"))
+        health_status["components"]["database"] = "healthy"
+    except Exception as e:
+        health_status["components"]["database"] = "unhealthy"
+        health_status["status"] = "degraded"
+        logger.error(f"Database health check failed: {e}")
+    
+    # Check signal buffer status
+    try:
+        total_signals = sum(len(buf) for buf in SIGNALS.values())
+        health_status["components"]["signal_buffer"] = {
+            "status": "healthy",
+            "total_signals": total_signals,
+            "services": len(SIGNALS)
+        }
+    except Exception as e:
+        health_status["components"]["signal_buffer"] = "unhealthy"
+        health_status["status"] = "degraded"
+        logger.error(f"Signal buffer health check failed: {e}")
+    
+    # Set HTTP status code based on health
+    status_code = 200 if health_status["status"] == "healthy" else 503
+    
+    from fastapi.responses import JSONResponse
+    return JSONResponse(content=health_status, status_code=status_code)
 
 
 @app.get("/metrics")
@@ -435,7 +479,7 @@ async def set_policy(
     # Validate policy has at least one rule
     if not req.policy.rules:
         prom_metrics.record_policy_validation_error()
-        raise HTTPException(status_code=400, detail="Policy must contain at least one rule")
+        raise PolicyValidationError("Policy must contain at least one rule")
     
     # Run conflict detection
     validation_result = validate_policy_rules(req.policy.rules)
@@ -445,9 +489,14 @@ async def set_policy(
         prom_metrics.record_policy_validation_error()
         error_conflicts = [c for c in validation_result["conflicts"] if c.severity == "error"]
         error_messages = [c.message for c in error_conflicts]
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Policy validation failed: {'; '.join(error_messages)}"
+        raise PolicyValidationError(
+            f"Policy validation failed: {'; '.join(error_messages)}",
+            conflicts=[{
+                "type": c.type,
+                "severity": c.severity,
+                "rule_ids": c.rule_ids,
+                "message": c.message
+            } for c in error_conflicts]
         )
     
     # Log warnings but allow update

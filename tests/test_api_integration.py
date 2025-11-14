@@ -20,8 +20,8 @@ class TestHealthEndpoint:
         response = client.get("/healthz")
         assert response.status_code == 200
         data = response.json()
-        assert data["ok"] is True
-        assert "ts" in data
+        assert data["status"] in ["healthy", "degraded"]
+        assert "timestamp" in data
     
     def test_healthz_timestamp_format(self):
         """Health check timestamp should be ISO format."""
@@ -29,7 +29,7 @@ class TestHealthEndpoint:
         data = response.json()
         # Should be parseable as ISO datetime
         from datetime import datetime
-        ts = datetime.fromisoformat(data["ts"].replace("Z", "+00:00"))
+        ts = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
         assert ts is not None
 
 
