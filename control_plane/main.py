@@ -1,10 +1,24 @@
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Literal, Optional
+import re
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel, Field, field_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
+# Configuration
+MAX_SIGNALS_PER_SERVICE = 10000  # Max signals to keep per (service, env)
+MAX_SERVICE_NAME_LEN = 64
+MAX_ENV_NAME_LEN = 32
+VALID_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+
+# Rate limiter setup
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Adaptive Observability Control Plane", version="0.1.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # --- Models
@@ -109,11 +123,17 @@ def _now() -> datetime:
 
 
 def _prune(key: tuple[str, str]):
+    """Prune old signals and enforce max buffer size."""
     cutoff = _now() - timedelta(seconds=WINDOW_MAX)
     buf = SIGNALS.get(key)
     if not buf:
         return
-    SIGNALS[key] = [s for s in buf if s.ts >= cutoff]
+    # Remove old signals
+    buf = [s for s in buf if s.ts >= cutoff]
+    # Enforce max buffer size (keep most recent)
+    if len(buf) > MAX_SIGNALS_PER_SERVICE:
+        buf = sorted(buf, key=lambda s: s.ts, reverse=True)[:MAX_SIGNALS_PER_SERVICE]
+    SIGNALS[key] = buf
 
 
 def _calc_aggregates(buf: List[Signal], window_s: Optional[int] = None) -> Dict[str, float]:
@@ -210,27 +230,55 @@ async def healthz():
 
 
 @app.get("/policy", response_model=Policy)
-async def get_policy():
+@limiter.limit("50/minute")
+async def get_policy(request: Request):
+    """Get the current policy configuration."""
     return POLICY
 
 
 @app.post("/policy", response_model=Policy)
-async def set_policy(req: UpsertPolicy):
+@limiter.limit("10/minute")  # Strict limit on policy updates
+async def set_policy(request: Request, req: UpsertPolicy):
+    """Update the policy configuration. Restricted endpoint."""
     global POLICY
+    # Validate policy has at least one rule
+    if not req.policy.rules:
+        raise HTTPException(status_code=400, detail="Policy must contain at least one rule")
+    # Validate rule IDs are unique
+    rule_ids = [r.id for r in req.policy.rules]
+    if len(rule_ids) != len(set(rule_ids)):
+        raise HTTPException(status_code=400, detail="Rule IDs must be unique")
     POLICY = req.policy
     return POLICY
 
 
 class SignalIn(BaseModel):
-    service: str
-    environment: str
-    latency_ms: Optional[float] = None
+    service: str = Field(..., min_length=1, max_length=MAX_SERVICE_NAME_LEN)
+    environment: str = Field(..., min_length=1, max_length=MAX_ENV_NAME_LEN)
+    latency_ms: Optional[float] = Field(None, ge=0.0, le=1_000_000.0)
     error: Optional[bool] = None
-    attrs: Dict[str, str] = Field(default_factory=dict)
+    attrs: Dict[str, str] = Field(default_factory=dict, max_length=50)
+    
+    @field_validator('service', 'environment')
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not VALID_NAME_PATTERN.match(v):
+            raise ValueError(f"Name must contain only alphanumeric, underscore, and hyphen characters: {v}")
+        return v
+    
+    @field_validator('attrs')
+    @classmethod
+    def validate_attrs(cls, v: Dict[str, str]) -> Dict[str, str]:
+        for key, value in v.items():
+            if len(key) > 128 or len(value) > 1024:
+                raise ValueError("Attribute keys must be ≤128 chars, values ≤1024 chars")
+        return v
 
 
 @app.post("/signal", response_model=EffectiveConfig)
-async def ingest_signal(sig: SignalIn):
+@limiter.limit("100/minute")  # 100 requests per minute per IP
+async def ingest_signal(request: Request, sig: SignalIn):
+    """Ingest telemetry signal and return effective configuration."""
     s = Signal(
         service=sig.service,
         environment=sig.environment,
@@ -247,5 +295,15 @@ async def ingest_signal(sig: SignalIn):
 
 
 @app.get("/config/{service}/{environment}", response_model=EffectiveConfig)
-async def get_config(service: str, environment: str):
+@limiter.limit("200/minute")  # 200 requests per minute per IP
+async def get_config(request: Request, service: str, environment: str):
+    """Get effective configuration for a service and environment."""
+    # Validate service and environment names
+    if len(service) > MAX_SERVICE_NAME_LEN or len(environment) > MAX_ENV_NAME_LEN:
+        raise HTTPException(status_code=400, detail="Service or environment name too long")
+    if not VALID_NAME_PATTERN.match(service) or not VALID_NAME_PATTERN.match(environment):
+        raise HTTPException(
+            status_code=400,
+            detail="Service and environment must contain only alphanumeric, underscore, and hyphen characters"
+        )
     return evaluate(service, environment)

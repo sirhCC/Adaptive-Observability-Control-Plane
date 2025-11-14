@@ -1,0 +1,261 @@
+# Adaptive Observability Control Plane - Improvement Roadmap
+
+This document tracks improvements, fixes, and features to be implemented, prioritized from high to low.
+
+## 🔴 HIGH PRIORITY (Critical for Production)
+
+### 1. Input Validation & Rate Limiting ⚠️
+**Status:** ✅ COMPLETED  
+**Impact:** Security & Stability
+
+- [x] Add rate limiting on `/signal` endpoint - agents could DDoS the control plane
+- [x] Add validation on service/env names (could inject special chars)
+- [x] Implement max buffer size for SIGNALS - memory leak risk
+- [x] Add payload size limits
+- [ ] Add request throttling per service/tenant (future enhancement)
+
+### 2. Comprehensive Test Coverage 🧪
+**Status:** Not Started  
+**Impact:** Reliability
+
+- [ ] Test rule priority ordering
+- [ ] Test service/env scoping logic
+- [ ] Test multiple conditions per rule
+- [ ] Test all API endpoints (health, policy CRUD, signal ingestion)
+- [ ] Test edge cases (empty signals, malformed data, concurrent requests)
+- [ ] Add integration tests with real HTTP calls
+- [ ] Add performance/load tests
+- [ ] Current coverage: ~15%, Target: 80%+
+
+### 3. Database Persistence 💾
+**Status:** Not Started  
+**Impact:** Data Loss Prevention
+
+- [ ] Replace in-memory POLICY and SIGNALS with database
+- [ ] Add SQLite for local dev, Postgres for production
+- [ ] Implement database migrations (Alembic)
+- [ ] Add audit log for policy changes
+- [ ] Enable horizontal scaling with shared state
+- [ ] Add signal history retention policies
+- [ ] Add policy versioning and rollback
+
+### 4. Authentication & Authorization 🔐
+**Status:** Not Started  
+**Impact:** Security
+
+- [ ] Add API key validation for agents
+- [ ] Implement service-to-service authentication
+- [ ] Add role-based access control (RBAC)
+- [ ] Protect `/policy` POST endpoint - only admins should modify
+- [ ] Add multi-tenancy support
+- [ ] Add OAuth2/OIDC integration option
+- [ ] Add request signing for agent authentication
+
+### 5. Observability for the Control Plane Itself 📊
+**Status:** Not Started  
+**Impact:** Operational Visibility
+
+- [ ] Add metrics on rule evaluation performance (latency, throughput)
+- [ ] Add structured logging for policy changes
+- [ ] Track signal ingestion rate and buffer sizes
+- [ ] Add alerting when control plane is unhealthy
+- [ ] Add distributed tracing for request flows
+- [ ] Add dashboard for control plane health
+- [ ] Expose Prometheus `/metrics` endpoint
+
+---
+
+## 🟡 MEDIUM PRIORITY (Important for Robustness)
+
+### 6. Advanced Aggregation Functions
+**Status:** Not Started  
+**Impact:** Feature Completeness
+
+- [ ] Add p50, p90, p99 percentile calculations
+- [ ] Add avg, max, min aggregations
+- [ ] Support custom percentiles (configurable)
+- [ ] Add histogram buckets
+- [ ] Add rate calculations (req/sec, err/sec)
+- [ ] Add sliding window aggregations
+- [ ] Add count and sum aggregations
+
+### 7. Rule Conflict Detection & Warnings
+**Status:** Not Started  
+**Impact:** User Experience
+
+- [ ] Detect when multiple rules match and warn users
+- [ ] Validate rule priorities make logical sense
+- [ ] Warn when rules will never match (impossible conditions)
+- [ ] Detect overlapping/conflicting actions
+- [ ] Add policy validation endpoint before applying
+- [ ] Show "effective rules" that would apply to test signals
+
+### 8. Better Error Handling
+**Status:** Not Started  
+**Impact:** Debugging & Reliability
+
+- [ ] Replace generic 500 errors with specific error codes
+- [ ] Use HTTPException (currently imported but unused)
+- [ ] Return structured error responses (error code, message, details)
+- [ ] Add validation errors with field-level details
+- [ ] Add request ID tracking for debugging
+- [ ] Add error telemetry and categorization
+
+### 9. API Versioning
+**Status:** Not Started  
+**Impact:** Future-proofing
+
+- [ ] Add `/v1` prefix to all routes
+- [ ] Implement version negotiation via headers
+- [ ] Add deprecation warnings for old endpoints
+- [ ] Document breaking change policy
+- [ ] Add migration guides between versions
+
+### 10. Configuration Validation Endpoint
+**Status:** Not Started  
+**Impact:** Developer Experience
+
+- [ ] Add `POST /policy/validate` to test rules without applying
+- [ ] Add `GET /policy/{rule_id}/simulate` to test with sample signals
+- [ ] Add dry-run mode for policy updates
+- [ ] Show which rules would match given test inputs
+- [ ] Validate condition logic before saving
+
+### 11. Signal Replay & Time-Travel
+**Status:** Not Started  
+**Impact:** Debugging
+
+- [ ] Accept client-provided timestamps in `/signal` payload
+- [ ] Add endpoint to query historical configs
+- [ ] Support replaying past signals for debugging
+- [ ] Add "what would have happened" analysis
+- [ ] Add signal export for offline analysis
+
+---
+
+## 🟢 LOW PRIORITY (Nice to Have)
+
+### 12. Export/Import Policies
+**Status:** Not Started  
+**Impact:** Portability
+
+- [ ] Add `GET /policy/export` returning YAML/JSON
+- [ ] Add `POST /policy/import` from file
+- [ ] Support GitOps workflow (policy as code)
+- [ ] Add policy templates/presets
+- [ ] Version control integration
+
+### 13. Docker Health Checks
+**Status:** Not Started  
+**Impact:** Deployment
+
+- [ ] Add HEALTHCHECK to Dockerfiles
+- [ ] Implement `/healthz` liveness check
+- [ ] Implement `/readyz` readiness check (DB connectivity)
+- [ ] Add startup probes for Kubernetes
+- [ ] Add dependency health checks
+
+### 14. CORS Configuration
+**Status:** Not Started  
+**Impact:** Web Integration
+
+- [ ] Add CORS middleware
+- [ ] Make CORS origins configurable
+- [ ] Support browser-based admin UIs
+- [ ] Add preflight request handling
+
+### 15. Graceful Shutdown
+**Status:** Not Started  
+**Impact:** Reliability
+
+- [ ] Add signal handlers for SIGTERM/SIGINT
+- [ ] Wait for in-flight requests to complete
+- [ ] Flush buffered signals before exit
+- [ ] Add configurable shutdown timeout
+- [ ] Add shutdown hooks for cleanup
+
+### 16. Action Merge Strategies
+**Status:** Not Started  
+**Impact:** Flexibility
+
+- [ ] Add configurable merge strategies (not just "last writer wins")
+- [ ] Support: min/max sampling rate
+- [ ] Support: strictest log level
+- [ ] Support: additive actions
+- [ ] Make strategy configurable per-policy or per-rule
+
+### 17. Feature Flag Support
+**Status:** Not Started  
+**Impact:** Feature Completeness
+
+- [ ] Implement `kind="feature_flag"` condition (currently defined but not used)
+- [ ] Integrate with LaunchDarkly
+- [ ] Integrate with Split.io
+- [ ] Integrate with custom feature flag service
+- [ ] Add feature flag evaluation caching
+
+### 18. Wildcard Service/Env Matching
+**Status:** Not Started  
+**Impact:** Flexibility
+
+- [ ] Implement `*` wildcard for service/env (mentioned in comments but not working)
+- [ ] Add regex pattern matching for service names
+- [ ] Add glob pattern matching
+- [ ] Support service groups/tags
+
+### 19. Metrics Endpoint
+**Status:** Not Started  
+**Impact:** Monitoring
+
+- [ ] Add Prometheus `/metrics` endpoint
+- [ ] Expose: `rule_evaluations_total` counter
+- [ ] Expose: `signals_received_total` counter
+- [ ] Expose: `active_signals_count` gauge
+- [ ] Expose: `policy_changes_total` counter
+- [ ] Expose: `rule_evaluation_duration_seconds` histogram
+- [ ] Add custom labels (service, env, rule_id)
+
+### 20. Code Quality Fixes
+**Status:** Not Started  
+**Impact:** Maintainability
+
+- [x] Remove unused `HTTPException` import
+- [x] Refactor `global POLICY` to use dependency injection
+- [ ] Add type hints for `op_map` functions
+- [ ] Add docstrings to all functions and classes
+- [ ] Split `main.py` into modules:
+  - [ ] `models.py` - Pydantic models
+  - [ ] `engine.py` - Rule evaluation logic
+  - [ ] `api.py` - FastAPI routes
+  - [ ] `storage.py` - Data persistence layer
+- [ ] Add linting configuration (ruff, black, mypy)
+- [ ] Add pre-commit hooks
+- [ ] Add code complexity checks
+
+---
+
+## 📝 Notes
+
+### Recently Completed
+- ✅ Fixed p95 percentile calculation bug
+- ✅ Replaced deprecated `datetime.utcnow()` with `datetime.now(timezone.utc)`
+- ✅ Added per-rule window filtering for aggregates
+- ✅ Added stricter type validation with Literal types
+
+### Quick Wins (Low Effort, High Impact)
+1. Fix linter warnings (#20)
+2. Add basic tests (#2)
+3. Add rate limiting (#1)
+4. Add better error handling (#8)
+
+### Dependencies
+- Item #3 (Database) blocks horizontal scaling
+- Item #4 (Auth) should be implemented before exposing to internet
+- Item #5 (Observability) needed before production deployment
+- Item #7 (Rule conflicts) depends on #10 (validation endpoint)
+
+### Estimated Timeline
+- **Phase 1 (Week 1-2):** Items #1, #2, #8, #20
+- **Phase 2 (Week 3-4):** Items #3, #4, #5
+- **Phase 3 (Month 2):** Items #6, #7, #9, #10
+- **Phase 4 (Month 3+):** Remaining items as needed
