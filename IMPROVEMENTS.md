@@ -164,15 +164,27 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - Detailed condition evaluation shows which conditions matched/failed
 - Integrated with existing rule conflict detection from Item #7
 
-### 11. Signal Replay & Time-Travel
-**Status:** Not Started  
+### 11. ✅ Signal Replay & Time-Travel
+**Status:** Completed  
 **Impact:** Debugging
 
-- [ ] Accept client-provided timestamps in `/signal` payload
-- [ ] Add endpoint to query historical configs
-- [ ] Support replaying past signals for debugging
-- [ ] Add "what would have happened" analysis
-- [ ] Add signal export for offline analysis
+- [x] Accept client-provided timestamps in `/signal` payload
+  - Timestamps validated: 7 days past, 1 day future, timezone-aware
+  - Backward compatible (optional timestamp field)
+- [x] Add endpoints to query historical configs
+  - `GET /v1/history/policy` - Policy version history
+  - `GET /v1/history/policy/at` - Policy active at specific time
+- [x] Support replaying past signals for debugging
+  - `POST /v1/replay` - Replay signals with current or historical policy
+  - Time-travel: use policy from any point in history
+- [x] Add "what would have happened" analysis
+  - `POST /v1/compare` - Compare policies side-by-side
+  - Shows differences in effective configs
+- [x] Add signal export for offline analysis
+  - `GET /v1/signals/export` - Export with filters (service, env, time range)
+  - Format suitable for replay
+- [x] Comprehensive tests (23 tests, all passing)
+- [x] Documentation updated in README.md
 
 ---
 

@@ -27,7 +27,7 @@ A production-ready control plane for adaptive observability that dynamically adj
 - ✅ **Structured Logging** - loguru with contextual logging
 - ✅ **Health Checks** - `/healthz` endpoint for monitoring
 - ✅ **OpenAPI/Swagger** - Interactive API documentation
-- ✅ **121 Comprehensive Tests** - >80% code coverage with extensive error handling tests
+- ✅ **154 Comprehensive Tests** - >80% code coverage with extensive error handling tests
 
 ---
 
@@ -103,7 +103,7 @@ pytest tests/test_auth.py -v
 pytest --cov=control_plane --cov-report=html
 ```
 
-**Test Coverage**: 121 tests covering:
+**Test Coverage**: 154 tests covering:
 - API integration (21 tests)
 - Authentication & authorization (10 tests)
 - Input validation (17 tests)
@@ -112,6 +112,8 @@ pytest --cov=control_plane --cov-report=html
 - Advanced aggregations (14 tests)
 - Rule conflict detection (17 tests)
 - Error handling & exceptions (18 tests)
+- Policy testing & simulation (10 tests)
+- Signal replay & time-travel (23 tests)
 - Edge cases & window filtering
 
 ---
@@ -196,6 +198,98 @@ All API endpoints are versioned under the `/v1` prefix for future compatibility.
 - `POST /v1/policy?dry_run=true` - Validate policy without applying (dry-run mode)
 - `POST /v1/policy/simulate` - Simulate policy with test signals
 - `POST /v1/auth/generate-key` - Generate new API keys
+
+### Signal Replay & Time-Travel Debugging
+
+**Client-Provided Timestamps** enable replaying historical signals:
+
+```powershell
+# Send signal with historical timestamp
+curl -X POST http://localhost:8080/v1/signal `
+  -H "Content-Type: application/json" `
+  -d '{
+    "service": "api",
+    "environment": "prod",
+    "latency_ms": 450,
+    "error": true,
+    "timestamp": "2025-11-14T15:30:00+00:00"
+  }'
+```
+
+**Timestamps must be:**
+- ISO 8601 format with timezone
+- Within 7 days in the past
+- Within 1 day in the future
+
+**Policy History** tracks all policy changes with timestamps:
+
+```powershell
+# Get policy version history
+curl http://localhost:8080/v1/history/policy
+
+# Get policy active at specific time
+curl "http://localhost:8080/v1/history/policy/at?timestamp=2025-11-14T15:00:00+00:00"
+```
+
+**Signal Replay** re-evaluates historical signals with policies:
+
+```powershell
+# Replay signals with current policy
+curl -X POST http://localhost:8080/v1/replay `
+  -H "Content-Type: application/json" `
+  -d '{
+    "signals": [
+      {"service": "api", "environment": "prod", "latency_ms": 500, "timestamp": "2025-11-14T15:00:00+00:00"}
+    ]
+  }'
+
+# Replay with historical policy (time-travel)
+curl -X POST http://localhost:8080/v1/replay `
+  -H "Content-Type: application/json" `
+  -d '{
+    "signals": [...],
+    "policy_timestamp": "2025-11-14T10:00:00+00:00"
+  }'
+```
+
+**Response includes:**
+- Effective configuration for each signal
+- Rules that matched
+- Policy information (current or historical)
+
+**Policy Comparison** shows "what would have happened":
+
+```powershell
+# Compare how different policies handle same signals
+curl -X POST http://localhost:8080/v1/compare `
+  -H "Content-Type: application/json" `
+  -d '{
+    "signals": [
+      {"service": "api", "environment": "prod", "latency_ms": 600}
+    ],
+    "compare_policies": ["2025-11-14T10:00:00+00:00", "current"]
+  }'
+```
+
+**Response includes:**
+- Effective config from each policy
+- Differences between policies
+- Summary statistics
+
+**Signal Export** for offline analysis:
+
+```powershell
+# Export all signals
+curl "http://localhost:8080/v1/signals/export"
+
+# Export filtered signals
+curl "http://localhost:8080/v1/signals/export?service=api&environment=prod&limit=100"
+
+# Export with time range
+curl "http://localhost:8080/v1/signals/export?start_time=2025-11-14T10:00:00+00:00&end_time=2025-11-14T16:00:00+00:00"
+```
+
+Exported signals are in JSON format suitable for replay.
 
 ### Policy Testing & Simulation
 
