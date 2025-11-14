@@ -142,15 +142,27 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - [ ] Document breaking change policy (when v2 is needed)
 - [ ] Add migration guides between versions (when v2 is needed)
 
-### 10. Configuration Validation Endpoint
-**Status:** Not Started  
+### 10. Configuration Validation Endpoint  
+**Status:** ✅ Completed  
 **Impact:** Developer Experience
 
-- [ ] Add `POST /policy/validate` to test rules without applying
-- [ ] Add `GET /policy/{rule_id}/simulate` to test with sample signals
-- [ ] Add dry-run mode for policy updates
-- [ ] Show which rules would match given test inputs
-- [ ] Validate condition logic before saving
+- [x] Add `POST /v1/policy/validate` to test rules without applying (completed in Item #7)
+- [x] Add `POST /v1/policy/simulate` to test policy with sample signals
+- [x] Add dry-run mode for policy updates (`?dry_run=true`)
+- [x] Show which rules would match given test inputs with detailed evaluation results
+- [x] Validate condition logic before saving with conflict detection
+- [x] 10 comprehensive tests for simulation and dry-run features
+
+**Implementation Notes:**
+- Policy simulation accepts 1-100 test signals and returns:
+  - Matched rules for each signal with condition evaluation details
+  - Effective configuration that would be applied
+  - Summary statistics (signals with/without matches, total rule matches)
+- Dry-run mode validates and simulates without applying changes:
+  - Returns validation results, conflict warnings, and policy preview
+  - Same authentication requirements as regular policy updates
+- Detailed condition evaluation shows which conditions matched/failed
+- Integrated with existing rule conflict detection from Item #7
 
 ### 11. Signal Replay & Time-Travel
 **Status:** Not Started  

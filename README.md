@@ -193,7 +193,56 @@ All API endpoints are versioned under the `/v1` prefix for future compatibility.
 
 ### Protected Endpoints (Require Admin API Key)
 - `POST /v1/policy` - Update policy configuration
+- `POST /v1/policy?dry_run=true` - Validate policy without applying (dry-run mode)
+- `POST /v1/policy/simulate` - Simulate policy with test signals
 - `POST /v1/auth/generate-key` - Generate new API keys
+
+### Policy Testing & Simulation
+
+**Policy Simulation** allows you to test how policies would behave with test signals before deploying them:
+
+```powershell
+# Simulate policy with test signals
+curl -X POST http://localhost:8080/v1/policy/simulate `
+  -H "Content-Type: application/json" `
+  -d '{
+    "policy": {
+      "id": "test-policy",
+      "rules": [...]
+    },
+    "test_signals": [
+      {"service": "api", "environment": "prod", "latency_ms": 600, "error": false},
+      {"service": "api", "environment": "prod", "latency_ms": 200, "error": true}
+    ]
+  }'
+```
+
+**Response includes:**
+- Which rules matched for each test signal
+- Detailed condition evaluation results (matched/not matched)
+- Effective configuration that would be applied
+- Summary statistics (signals with/without matches, total rule matches)
+
+**Dry-Run Mode** validates policies without applying them:
+
+```powershell
+# Validate policy without applying changes
+curl -X POST "http://localhost:8080/v1/policy?dry_run=true" `
+  -H "Content-Type: application/json" `
+  -H "X-API-Key: $env:ADMIN_API_KEY" `
+  -d '{
+    "policy": {
+      "id": "new-policy",
+      "rules": [...]
+    }
+  }'
+```
+
+**Response includes:**
+- Validation status (valid/invalid)
+- Conflict detection results
+- Warnings about overlapping rules or priorities
+- Policy preview without actual deployment
 
 ### Prometheus Metrics
 
