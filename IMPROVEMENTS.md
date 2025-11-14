@@ -87,16 +87,18 @@ This document tracks improvements, fixes, and features to be implemented, priori
 ## 🟡 MEDIUM PRIORITY (Important for Robustness)
 
 ### 6. Advanced Aggregation Functions
-**Status:** Not Started  
+**Status:** ✅ COMPLETED  
 **Impact:** Feature Completeness
 
-- [ ] Add p50, p90, p99 percentile calculations
-- [ ] Add avg, max, min aggregations
-- [ ] Support custom percentiles (configurable)
-- [ ] Add histogram buckets
-- [ ] Add rate calculations (req/sec, err/sec)
-- [ ] Add sliding window aggregations
-- [ ] Add count and sum aggregations
+- [x] Add p50, p90, p99 percentile calculations
+- [x] Add avg, max, min aggregations
+- [x] Add rate calculations (req/sec, error count)
+- [x] Add count aggregations (request count, error count)
+- [x] Sliding window aggregations (via window_s parameter)
+- [x] Support for all percentiles in rule conditions
+- [x] 14 comprehensive tests for aggregation functions
+- [ ] Add histogram buckets (future enhancement)
+- [ ] Support custom percentiles via API (future enhancement)
 
 ### 7. Rule Conflict Detection & Warnings
 **Status:** Not Started  
