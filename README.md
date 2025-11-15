@@ -40,21 +40,21 @@ A **production-ready** control plane for adaptive observability that dynamically
 - ✅ **Policy Validation** - Conflict detection with severity levels (error/warning/info)
 - ✅ **Signal Replay** - Time-travel debugging with historical policy comparison
 - ✅ **Policy Export/Import** - YAML/JSON support for GitOps workflows
-- ✅ **289 Comprehensive Tests** (263 passed, 26 skipped) - >80% code coverage
+- ✅ **313 Comprehensive Tests** (287 passed, 26 skipped) - >80% code coverage
 
 ### 🎉 Production Ready
 
-**85% feature complete** - All critical and important features implemented:
+**95% feature complete** - All critical and important features implemented:
 
-- ✅ **17 of 20 roadmap items complete** (5/5 high priority, 6/6 medium priority, 6/6 low priority)
+- ✅ **19 of 20 roadmap items complete** (5/5 high priority, 6/6 medium priority, 7/7 low priority)
 - ✅ **Security hardened** - Authentication, rate limiting, input validation
-- ✅ **Battle-tested** - 289 tests covering edge cases, error handling, and integration
+- ✅ **Battle-tested** - 313 tests covering edge cases, error handling, and integration
 - ✅ **Deployment ready** - Docker support, K8s health checks, graceful shutdown
 - ✅ **Observable** - Prometheus metrics, structured logging, health endpoints
 - ✅ **Scalable architecture** - Database persistence, async operations, efficient aggregations
 - ✅ **Developer friendly** - OpenAPI docs, policy validation, simulation endpoints
 
-**Recent additions:** Feature flag support (LaunchDarkly, Split.io, custom HTTP), action merge strategies, signal replay with time-travel debugging, and comprehensive policy validation.
+**Recent additions:** Feature flag support (LaunchDarkly, Split.io, custom HTTP), action merge strategies, signal replay with time-travel debugging, comprehensive policy validation, and **flexible pattern matching** (wildcards, glob patterns, regex) for service/environment targeting.
 
 ---
 
@@ -179,7 +179,8 @@ Adaptive-Observability-Control-Plane/
 │   ├── test_aggregations.py         # 14 aggregation function tests
 │   ├── test_metrics.py              # 11 Prometheus metrics tests
 │   ├── test_rule_validation.py      # 17 conflict detection tests
-│   └── test_error_handling.py       # 18 error handling tests
+│   ├── test_error_handling.py       # 18 error handling tests
+│   └── test_pattern_matching.py     # 24 pattern matching tests
 ├── alembic/
 │   ├── versions/            # Database migrations
 │   └── env.py               # Alembic configuration
@@ -693,6 +694,99 @@ The control plane calculates comprehensive metrics for rule evaluation:
   }
 }
 ```
+
+---
+
+## 🎯 Pattern Matching
+
+The control plane supports **flexible pattern matching** for service and environment targeting, enabling powerful rule scoping across multiple services or environments.
+
+### Supported Patterns
+
+1. **Wildcard (`*`)** - Matches all services/environments
+   ```json
+   {"service": "*", "environment": "production"}  // All services in production
+   ```
+
+2. **Glob Patterns** - Unix-style patterns with `*` and `?`
+   ```json
+   {"service": "api-*"}           // Matches api-users, api-payments, api-orders
+   {"service": "*-service"}       // Matches user-service, payment-service
+   {"service": "api-?-v1"}        // Matches api-a-v1, api-b-v1 (single char)
+   {"environment": "prod-*"}      // Matches prod-us-east, prod-eu-west
+   ```
+
+3. **Regex Patterns** - Advanced matching with `regex:` prefix
+   ```json
+   {"service": "regex:^api-v[0-9]+$"}              // Matches api-v1, api-v2, api-v10
+   {"environment": "regex:^(dev|test|staging).*$"} // Matches dev, test-us, staging-eu
+   ```
+
+4. **Exact Match** - Simple string matching (default)
+   ```json
+   {"service": "user-service", "environment": "production"}
+   ```
+
+5. **Match All** - Empty or null values match everything
+   ```json
+   {"service": null, "environment": null}  // Matches all services and environments
+   ```
+
+### Real-World Examples
+
+**Multi-Region Services:**
+```json
+{
+  "id": "payment-multi-region",
+  "service": "payment-*",
+  "environment": "prod-*",
+  "conditions": [{"kind": "metric", "op": ">", "key": "error_rate", "value": 0.01}]
+}
+```
+Matches: `payment-api`, `payment-processor` in `prod-us-east`, `prod-eu-west`, etc.
+
+**Versioned Environments:**
+```json
+{
+  "id": "canary-monitoring",
+  "service": "api-gateway",
+  "environment": "regex:^prod-v[0-9]+$",
+  "actions": {"trace_sample_rate": 1.0}
+}
+```
+Matches: `prod-v1`, `prod-v2`, `prod-v10` but not `prod` or `prod-canary`
+
+**Microservice Family:**
+```json
+{
+  "id": "api-family-debug",
+  "service": "api-*-service",
+  "environment": "development",
+  "actions": {"log_level": "DEBUG"}
+}
+```
+Matches: `api-user-service`, `api-payment-service`, `api-order-service`
+
+### Pattern Validation
+
+The `/v1/policy/validate` endpoint validates pattern syntax before accepting policies:
+
+```json
+// Invalid regex pattern
+{"service": "regex:^[unclosed"}
+// Returns: {"is_valid": false, "error": "Invalid regex pattern"}
+
+// Valid patterns
+{"service": "api-*", "environment": "regex:^prod.*$"}
+// Returns: {"is_valid": true}
+```
+
+### Pattern Precedence
+
+When multiple rules match the same signal:
+1. **Priority** determines execution order (higher priority = evaluated first)
+2. **Exact matches** do not take precedence over patterns
+3. **All matching rules** are applied (actions merged based on merge strategy)
 
 ---
 
