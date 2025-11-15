@@ -33,6 +33,7 @@ from control_plane.exceptions import (
     DatabaseError
 )
 from control_plane.feature_flags import init_feature_flags, get_feature_flag_service
+from control_plane.pattern_matching import matches_service_pattern, matches_environment_pattern, validate_pattern
 
 # Configuration
 MAX_SIGNALS_PER_SERVICE = 10000  # Max signals to keep per (service, env)
@@ -573,10 +574,10 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
     effective = EffectiveConfig(service=service, environment=env)
 
     for rule in sorted((r for r in POLICY.rules if r.enabled), key=lambda r: r.priority):
-        # scope match
-        if rule.service and rule.service != service:
+        # scope match with pattern support
+        if not matches_service_pattern(service, rule.service):
             continue
-        if rule.environment and rule.environment != env:
+        if not matches_environment_pattern(env, rule.environment):
             continue
 
         matched = True
@@ -1180,6 +1181,24 @@ async def validate_policy(request: Request, req: UpsertPolicy):
     """Validate a policy configuration without applying it."""
     from control_plane.rule_validator import validate_policy_rules
     
+    # Validate service/environment patterns
+    pattern_errors = []
+    for rule in req.policy.rules:
+        if rule.service:
+            is_valid, error_msg = validate_pattern(rule.service)
+            if not is_valid:
+                pattern_errors.append(f"Rule '{rule.id}' has invalid service pattern: {error_msg}")
+        
+        if rule.environment:
+            is_valid, error_msg = validate_pattern(rule.environment)
+            if not is_valid:
+                pattern_errors.append(f"Rule '{rule.id}' has invalid environment pattern: {error_msg}")
+    
+    if pattern_errors:
+        raise PolicyValidationError(
+            f"Invalid patterns in policy: {'; '.join(pattern_errors)}"
+        )
+    
     # Run validation
     validation_result = validate_policy_rules(req.policy.rules)
     
@@ -1409,10 +1428,10 @@ async def simulate_policy(request: Request, req: SimulateRequest):
             if not rule.enabled:
                 continue
                 
-            # Check if rule scope matches
-            if rule.service and rule.service != "*" and rule.service != test_signal.service:
+            # Check if rule scope matches with pattern support
+            if not matches_service_pattern(test_signal.service, rule.service):
                 continue
-            if rule.environment and rule.environment != "*" and rule.environment != test_signal.environment:
+            if not matches_environment_pattern(test_signal.environment, rule.environment):
                 continue
             
             # Evaluate conditions
@@ -1663,10 +1682,10 @@ async def replay_signals(request: Request, req: ReplayRequest):
             if not rule.enabled:
                 continue
                 
-            # Check if rule scope matches
-            if rule.service and rule.service != "*" and rule.service != replay_signal.service:
+            # Check if rule scope matches with pattern support
+            if not matches_service_pattern(replay_signal.service, rule.service):
                 continue
-            if rule.environment and rule.environment != "*" and rule.environment != replay_signal.environment:
+            if not matches_environment_pattern(replay_signal.environment, rule.environment):
                 continue
             
             # Evaluate conditions
@@ -1796,10 +1815,10 @@ async def compare_policies(request: Request, req: CompareRequest):
                 if not rule.enabled:
                     continue
                     
-                # Check if rule scope matches
-                if rule.service and rule.service != "*" and rule.service != test_signal.service:
+                # Check if rule scope matches with pattern support
+                if not matches_service_pattern(test_signal.service, rule.service):
                     continue
-                if rule.environment and rule.environment != "*" and rule.environment != test_signal.environment:
+                if not matches_environment_pattern(test_signal.environment, rule.environment):
                     continue
                 
                 # Evaluate conditions
