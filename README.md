@@ -27,7 +27,7 @@ A production-ready control plane for adaptive observability that dynamically adj
 - ✅ **Structured Logging** - loguru with contextual logging
 - ✅ **Health Checks** - `/healthz` endpoint for monitoring
 - ✅ **OpenAPI/Swagger** - Interactive API documentation
-- ✅ **249 Comprehensive Tests** (223 passed, 26 skipped) - >80% code coverage with extensive error handling tests
+- ✅ **273 Comprehensive Tests** (247 passed, 26 skipped) - >80% code coverage with extensive error handling tests
 
 ---
 
@@ -116,6 +116,9 @@ pytest --cov=control_plane --cov-report=html
 - Signal replay & time-travel (23 tests)
 - Policy export/import & templates (25 tests)
 - Health checks & Docker deployment (22 tests)
+- CORS configuration (26 tests)
+- Graceful shutdown (22 tests)
+- Action merge strategies (24 tests)
 - Edge cases & window filtering
 
 ---
@@ -353,6 +356,75 @@ curl "http://localhost:8080/v1/policy/templates/balanced" | `
 - `performance-focused` - Latency-based adaptive policy
 - `cost-optimized` - Minimal overhead, elevates only on critical issues
 - `balanced` - Balanced policy with error and latency triggers (recommended)
+
+### Action Merge Strategies
+
+When multiple rules match, **merge strategies** determine how their actions are combined:
+
+**Policy-level Strategy** (default: `last_wins`):
+
+```json
+{
+  "id": "my-policy",
+  "merge_strategy": "min",
+  "rules": [...]
+}
+```
+
+**Rule-level Override** (overrides policy-level):
+
+```json
+{
+  "id": "critical-rule",
+  "priority": 10,
+  "merge_strategy": "max",
+  "actions": {...}
+}
+```
+
+**Available Strategies:**
+
+- `last_wins` (default) - Last matching rule wins (priority order)
+- `min` - Choose minimum value for numeric fields (most conservative sampling/periods)
+- `max` - Choose maximum value for numeric fields (most aggressive sampling/periods)
+- `strictest` - Most verbose log level (DEBUG > INFO > WARN > ERROR)
+- `additive` - Combine non-conflicting actions (uses strictest for logs, min for sampling)
+
+**Example: Cost Optimization**
+
+```json
+{
+  "merge_strategy": "min",
+  "rules": [
+    {
+      "id": "base-sampling",
+      "priority": 100,
+      "conditions": [{"kind": "always", "op": "always"}],
+      "actions": {"trace_sample_rate": 0.1}
+    },
+    {
+      "id": "error-sampling",
+      "priority": 50,
+      "conditions": [{"kind": "error_rate", "op": ">", "value": 0.01}],
+      "actions": {"trace_sample_rate": 0.5}
+    }
+  ]
+}
+```
+Result: `min(0.1, 0.5) = 0.1` (most cost-effective)
+
+**Example: Debug Everything**
+
+```json
+{
+  "merge_strategy": "strictest",
+  "rules": [
+    {"actions": {"log_level": "INFO"}},
+    {"actions": {"log_level": "DEBUG"}}
+  ]
+}
+```
+Result: `DEBUG` (most verbose)
 
 ### Policy Testing & Simulation
 

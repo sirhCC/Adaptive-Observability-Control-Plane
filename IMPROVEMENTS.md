@@ -286,14 +286,29 @@ This document tracks improvements, fixes, and features to be implemented, priori
 - [x] Documentation with K8s and Docker examples
 
 ### 16. Action Merge Strategies
-**Status:** Not Started  
+**Status:** ✅ Completed  
 **Impact:** Flexibility
 
-- [ ] Add configurable merge strategies (not just "last writer wins")
-- [ ] Support: min/max sampling rate
-- [ ] Support: strictest log level
-- [ ] Support: additive actions
-- [ ] Make strategy configurable per-policy or per-rule
+- [x] Add configurable merge strategies (not just "last writer wins")
+- [x] Support: min/max sampling rate
+- [x] Support: strictest log level (most verbose)
+- [x] Support: additive actions (combines min + strictest)
+- [x] Make strategy configurable per-policy or per-rule
+- [x] Comprehensive tests (24 tests, all passing)
+- [x] Documentation with examples
+
+**Merge Strategies Implemented:**
+- `last_wins` (default) - Priority-based override
+- `min` - Minimum numeric values (cost optimization)
+- `max` - Maximum numeric values (aggressive sampling)
+- `strictest` - Most verbose log level (DEBUG > INFO > WARN > ERROR)
+- `additive` - Combines strictest logs + min sampling
+
+**Features:**
+- Policy-level default strategy
+- Per-rule strategy override
+- Proper enum serialization for YAML export/import
+- Comprehensive edge case testing
 
 ### 17. Feature Flag Support
 **Status:** Not Started  
