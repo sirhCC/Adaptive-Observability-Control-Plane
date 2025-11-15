@@ -32,6 +32,7 @@ from control_plane.exceptions import (
     SignalProcessingError,
     DatabaseError
 )
+from control_plane.feature_flags import init_feature_flags, get_feature_flag_service
 
 # Configuration
 MAX_SIGNALS_PER_SERVICE = 10000  # Max signals to keep per (service, env)
@@ -48,6 +49,10 @@ CORS_ALLOW_HEADERS = os.getenv("CORS_ALLOW_HEADERS", "*").split(",")
 # Shutdown Configuration
 SHUTDOWN_TIMEOUT = int(os.getenv("SHUTDOWN_TIMEOUT", "30"))  # seconds
 shutdown_event = asyncio.Event()
+
+# Feature Flag Configuration
+FF_PROVIDER = os.getenv("FF_PROVIDER", "static")  # static, launchdarkly, splitio, custom
+FF_CACHE_TTL = int(os.getenv("FF_CACHE_TTL", "60"))  # seconds
 
 
 # Lifespan context manager for startup and shutdown
@@ -81,6 +86,10 @@ async def lifespan(app: FastAPI):
         'title': app.title,
     })
     logger.info("Prometheus metrics enabled at /metrics")
+    
+    # Initialize feature flag service
+    init_feature_flags(provider_type=FF_PROVIDER, cache_ttl=FF_CACHE_TTL)
+    logger.info(f"Feature flag service initialized with {FF_PROVIDER} provider")
     
     # Seed default policy if no policy exists
     async for db in get_db():
@@ -514,6 +523,41 @@ def _eval_condition(cond: Condition, signal: Signal, aggs: dict) -> bool:
         v = aggs.get(cond.key or "", 0.0)
         threshold = float(cond.value) if cond.value is not None else 0.0
         return op_map[cond.op](v, threshold)
+    elif cond.kind == "feature_flag":
+        # Evaluate feature flag
+        if not cond.key:
+            logger.warning("Feature flag condition missing 'key' field")
+            return False
+        
+        try:
+            ff_service = get_feature_flag_service()
+            # Build context from signal
+            context = {
+                "service": signal.service,
+                "environment": signal.environment,
+                **signal.attrs
+            }
+            # Synchronous wrapper for async evaluation
+            result = asyncio.run(ff_service.evaluate(
+                flag_key=cond.key,
+                context=context,
+                default=False
+            ))
+            flag_value = result.value
+            
+            # Support boolean comparisons
+            if cond.op == "==":
+                expected = bool(cond.value) if cond.value is not None else True
+                return flag_value == expected
+            elif cond.op == "!=":
+                expected = bool(cond.value) if cond.value is not None else True
+                return flag_value != expected
+            else:
+                # For other operators, treat flag value as boolean
+                return flag_value
+        except Exception as e:
+            logger.error(f"Error evaluating feature flag {cond.key}: {e}")
+            return False
     
     return False
 
