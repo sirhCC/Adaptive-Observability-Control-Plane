@@ -27,7 +27,7 @@ A production-ready control plane for adaptive observability that dynamically adj
 - ✅ **Structured Logging** - loguru with contextual logging
 - ✅ **Health Checks** - `/healthz` endpoint for monitoring
 - ✅ **OpenAPI/Swagger** - Interactive API documentation
-- ✅ **273 Comprehensive Tests** (247 passed, 26 skipped) - >80% code coverage with extensive error handling tests
+- ✅ **289 Comprehensive Tests** (263 passed, 26 skipped) - >80% code coverage with extensive error handling tests
 
 ---
 
@@ -171,6 +171,12 @@ Adaptive-Observability-Control-Plane/
 | `DATABASE_URL` | Database connection string | `sqlite:///./control_plane.db` |
 | `SECRET_KEY` | JWT token secret key | Auto-generated |
 | `ADMIN_API_KEY` | Admin authentication key | None (optional) |
+| `FF_PROVIDER` | Feature flag provider (`static`, `launchdarkly`, `splitio`, `custom`) | `static` |
+| `FF_CACHE_TTL` | Feature flag cache TTL in seconds | `60` |
+| `LD_SDK_KEY` | LaunchDarkly SDK key (if using LaunchDarkly) | None |
+| `SPLIT_API_KEY` | Split.io API key (if using Split.io) | None |
+| `FF_ENDPOINT_URL` | Custom feature flag endpoint URL | None |
+| `FF_AUTH_TOKEN` | Custom feature flag endpoint auth token | None |
 
 ### Example Configuration
 
@@ -182,7 +188,73 @@ $env:DATABASE_URL = "sqlite:///./control_plane.db"
 $env:DATABASE_URL = "postgresql://user:pass@localhost/observability"
 $env:ADMIN_API_KEY = "your-secure-admin-key-here"
 $env:SECRET_KEY = "your-secret-key-here"
+
+# Feature Flags (optional)
+$env:FF_PROVIDER = "static"  # or: launchdarkly, splitio, custom
+$env:FF_CACHE_TTL = "60"
 ```
+
+### Feature Flag Support
+
+The control plane supports dynamic feature flag integration for conditional policy rules:
+
+**Providers:**
+- **Static** (default) - Simple dictionary-based flags for testing
+- **LaunchDarkly** - Enterprise feature management (requires `launchdarkly-server-sdk`)
+- **Split.io** - A/B testing and feature flags (requires `splitio-client`)
+- **Custom HTTP** - Integration with custom feature flag services
+
+**Configuration:**
+
+```powershell
+# Static provider (development)
+$env:FF_PROVIDER = "static"
+
+# LaunchDarkly
+$env:FF_PROVIDER = "launchdarkly"
+$env:LD_SDK_KEY = "sdk-your-launchdarkly-key"
+$env:FF_CACHE_TTL = "60"
+
+# Split.io
+$env:FF_PROVIDER = "splitio"
+$env:SPLIT_API_KEY = "your-split-api-key"
+$env:FF_CACHE_TTL = "60"
+
+# Custom HTTP endpoint
+$env:FF_PROVIDER = "custom"
+$env:FF_ENDPOINT_URL = "https://flags.example.com"
+$env:FF_AUTH_TOKEN = "bearer-token-here"
+$env:FF_CACHE_TTL = "60"
+```
+
+**Usage in Policy Rules:**
+
+```json
+{
+  "rules": [
+    {
+      "id": "debug-on-feature-enabled",
+      "conditions": [
+        {
+          "kind": "feature_flag",
+          "key": "debug-mode",
+          "op": "==",
+          "value": true
+        }
+      ],
+      "actions": [
+        {"kind": "set_log_level", "target": "DEBUG"}
+      ]
+    }
+  ]
+}
+```
+
+**Features:**
+- **TTL-based caching** - Reduces API calls to external services (default: 60s)
+- **Context-aware** - Passes service, environment, and signal attributes to flag providers
+- **Graceful degradation** - Falls back to default values if provider unavailable
+- **Optional dependencies** - SDK packages only required if using specific providers
 
 ---
 
