@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Literal, Optional
+from enum import Enum
 import re
 import os
 import time
@@ -185,6 +186,15 @@ class Condition(BaseModel):
     window_s: Optional[int] = Field(default=None, description="Rolling window seconds for aggregations")
 
 
+class MergeStrategy(str, Enum):
+    """Strategy for merging actions when multiple rules match."""
+    LAST_WINS = "last_wins"  # Last matching rule wins (default, current behavior)
+    MIN = "min"  # Choose minimum value (for sampling rates)
+    MAX = "max"  # Choose maximum value (for sampling rates)
+    STRICTEST = "strictest"  # Most verbose log level (DEBUG > INFO > WARN > ERROR)
+    ADDITIVE = "additive"  # Combine all non-conflicting actions
+
+
 class Action(BaseModel):
     log_level: Optional[str] = None  # DEBUG|INFO|WARN|ERROR
     trace_sample_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
@@ -200,12 +210,20 @@ class Rule(BaseModel):
     conditions: List[Condition] = Field(default_factory=list)
     actions: Action
     enabled: bool = True
+    merge_strategy: Optional[MergeStrategy] = Field(
+        default=None,
+        description="Strategy for merging this rule's actions with others. If None, uses policy-level strategy."
+    )
 
 
 class Policy(BaseModel):
     id: str
     description: Optional[str] = None
     rules: List[Rule] = Field(default_factory=list)
+    merge_strategy: MergeStrategy = Field(
+        default=MergeStrategy.LAST_WINS,
+        description="Default merge strategy for all rules unless overridden at rule level"
+    )
 
 
 class Signal(BaseModel):
@@ -408,6 +426,81 @@ op_map = {
 }
 
 
+# Log level ordering for strictest merge strategy (higher = more verbose)
+LOG_LEVEL_ORDER = {
+    "ERROR": 0,
+    "WARN": 1,
+    "INFO": 2,
+    "DEBUG": 3
+}
+
+
+def _merge_log_level(current: str, new: Optional[str], strategy: MergeStrategy) -> str:
+    """Merge log level values according to strategy."""
+    if new is None:
+        return current
+    
+    if strategy == MergeStrategy.LAST_WINS:
+        return new
+    elif strategy == MergeStrategy.STRICTEST:
+        # Choose more verbose (higher value in LOG_LEVEL_ORDER)
+        current_order = LOG_LEVEL_ORDER.get(current.upper(), -1)
+        new_order = LOG_LEVEL_ORDER.get(new.upper(), -1)
+        # Keep whichever has higher order value (more verbose)
+        return new if new_order >= current_order else current
+    elif strategy == MergeStrategy.ADDITIVE:
+        # For log level, use strictest when additive
+        current_order = LOG_LEVEL_ORDER.get(current.upper(), -1)
+        new_order = LOG_LEVEL_ORDER.get(new.upper(), -1)
+        # Keep whichever has higher order value (more verbose)
+        return new if new_order >= current_order else current
+    else:
+        # MIN/MAX don't apply to log levels, use last wins
+        return new
+
+
+def _merge_float(current: float, new: Optional[float], strategy: MergeStrategy) -> float:
+    """Merge float values (sampling rates) according to strategy."""
+    if new is None:
+        return current
+    
+    if strategy == MergeStrategy.MIN:
+        return min(current, new)
+    elif strategy == MergeStrategy.MAX:
+        return max(current, new)
+    elif strategy == MergeStrategy.ADDITIVE:
+        # For additive, use minimum sampling (more conservative)
+        return min(current, new)
+    else:  # LAST_WINS, STRICTEST
+        return new
+
+
+def _merge_int(current: int, new: Optional[int], strategy: MergeStrategy) -> int:
+    """Merge integer values (metric periods) according to strategy."""
+    if new is None:
+        return current
+    
+    if strategy == MergeStrategy.MIN:
+        return min(current, new)
+    elif strategy == MergeStrategy.MAX:
+        return max(current, new)
+    elif strategy == MergeStrategy.ADDITIVE:
+        # For additive, use minimum period (more frequent collection)
+        return min(current, new)
+    else:  # LAST_WINS, STRICTEST
+        return new
+
+
+def _apply_action_merge(effective: EffectiveConfig, action: Action, strategy: MergeStrategy) -> None:
+    """Apply an action to effective config using the specified merge strategy."""
+    if action.log_level:
+        effective.log_level = _merge_log_level(effective.log_level, action.log_level, strategy)
+    if action.trace_sample_rate is not None:
+        effective.trace_sample_rate = _merge_float(effective.trace_sample_rate, action.trace_sample_rate, strategy)
+    if action.metric_period_s is not None:
+        effective.metric_period_s = _merge_int(effective.metric_period_s, action.metric_period_s, strategy)
+
+
 def _eval_condition(cond: Condition, signal: Signal, aggs: dict) -> bool:
     """Evaluate a single condition against a signal and aggregates."""
     if cond.kind == "always" or cond.op == "always":
@@ -470,14 +563,9 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
         prom_metrics.record_rule_match(rule.id, service, env)
         logger.info(f"Rule '{rule.id}' matched for {service}/{env}")
 
-        # Apply actions (last writer wins within ordered rules)
-        a = rule.actions
-        if a.log_level:
-            effective.log_level = a.log_level
-        if a.trace_sample_rate is not None:
-            effective.trace_sample_rate = a.trace_sample_rate
-        if a.metric_period_s is not None:
-            effective.metric_period_s = a.metric_period_s
+        # Apply actions using merge strategy (rule-level overrides policy-level)
+        strategy = rule.merge_strategy if rule.merge_strategy is not None else POLICY.merge_strategy
+        _apply_action_merge(effective, rule.actions, strategy)
 
     # Record evaluation metrics
     duration = time.time() - start_time
@@ -646,7 +734,7 @@ async def export_policy(
         Policy configuration in requested format
     """
     export_data = {
-        "policy": POLICY.model_dump(),
+        "policy": json.loads(POLICY.model_dump_json()),  # Use JSON serialization for proper enum handling
         "exported_at": _now().isoformat(),
         "version": "1.0"
     }
@@ -1306,16 +1394,13 @@ async def simulate_policy(request: Request, req: SimulateRequest):
                     "priority": rule.priority,
                     "description": rule.description,
                     "conditions": condition_results,
-                    "actions": rule.actions.model_dump(exclude_none=True)
+                    "actions": rule.actions.model_dump(exclude_none=True),
+                    "merge_strategy": rule.merge_strategy or req.policy.merge_strategy
                 })
                 
-                # Apply actions to effective config
-                if rule.actions.log_level:
-                    effective_config.log_level = rule.actions.log_level
-                if rule.actions.trace_sample_rate is not None:
-                    effective_config.trace_sample_rate = rule.actions.trace_sample_rate
-                if rule.actions.metric_period_s is not None:
-                    effective_config.metric_period_s = rule.actions.metric_period_s
+                # Apply actions using merge strategy
+                strategy = rule.merge_strategy if rule.merge_strategy is not None else req.policy.merge_strategy
+                _apply_action_merge(effective_config, rule.actions, strategy)
         
         results.append({
             "signal_index": idx,
@@ -1551,16 +1636,13 @@ async def replay_signals(request: Request, req: ReplayRequest):
                 matched_rules.append({
                     "rule_id": rule.id,
                     "priority": rule.priority,
-                    "description": rule.description
+                    "description": rule.description,
+                    "merge_strategy": rule.merge_strategy or policy_to_use.merge_strategy
                 })
                 
-                # Apply actions
-                if rule.actions.log_level:
-                    effective_config.log_level = rule.actions.log_level
-                if rule.actions.trace_sample_rate is not None:
-                    effective_config.trace_sample_rate = rule.actions.trace_sample_rate
-                if rule.actions.metric_period_s is not None:
-                    effective_config.metric_period_s = rule.actions.metric_period_s
+                # Apply actions using merge strategy
+                strategy = rule.merge_strategy if rule.merge_strategy is not None else policy_to_use.merge_strategy
+                _apply_action_merge(effective_config, rule.actions, strategy)
         
         results.append({
             "signal_index": idx,
