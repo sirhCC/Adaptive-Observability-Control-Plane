@@ -4,21 +4,27 @@ This document tracks code quality improvements, refactoring tasks, and technical
 
 ## Progress
 
-9 of 10 tasks complete (90%)
+9 of 10 tasks complete (90%) + Service Layer Migration 50% Complete
 
 **Last Updated:** November 16, 2025
 
 **Summary:**
 - ✅ Tasks 1-7: All completed and integrated
-- ✅ Task 9: Service layer pattern implemented  
-- ✅ Task 10: Validation helpers module created
-- ❌ Task 8: Router splitting (deferred until migration to services complete)
+- ✅ Task 9: Service layer pattern implemented (4 services, ~750 lines)
+- ✅ Task 10: Validation helpers module created (11 validators, 33 tests)
+- 🔄 Service Layer Migration: **7 of 14 core endpoints migrated** (see SERVICE_LAYER_MIGRATION.md)
+  * ✅ Policy endpoints (GET, POST, templates)
+  * ✅ Signal ingestion endpoint
+  * ✅ Config retrieval endpoint
+  * ✅ Health check endpoints (healthz, readyz)
+- ❌ Task 8: Router splitting (deferred until service migration complete)
 
 **Impact:**
-- ~1300 lines of new, well-structured code added
-- main.py reduced from 2335 → 2015 lines (-320 lines, ~14%)
-- 5 new reusable modules created (constants, exporters, policy_simulator, services, validators)
+- ~2100 lines of new, well-structured code added (services + validators + tests)
+- main.py at 2373 lines (includes fallback logic for test compatibility)
+- 6 new reusable modules created (constants, exporters, policy_simulator, 4 services, validators)
 - 320/320 tests passing ✅ (33 new validator tests added)
+- Clear separation of concerns with service layer architecture
 
 ---
 
