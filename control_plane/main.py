@@ -29,6 +29,7 @@ import json
 import yaml
 import signal
 import asyncio
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -207,6 +208,48 @@ app.add_middleware(
 
 # Register custom exception handlers
 register_exception_handlers(app)
+
+
+# Structured logging middleware
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    """Add request ID and performance tracking to all requests."""
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    
+    # Bind request context to logger
+    with logger.contextualize(
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        client_ip=request.client.host if request.client else "unknown"
+    ):
+        start_time = time.time()
+        
+        try:
+            response = await call_next(request)
+            duration_ms = (time.time() - start_time) * 1000
+            
+            # Log request completion with performance metrics
+            logger.info(
+                f"{request.method} {request.url.path}",
+                status_code=response.status_code,
+                duration_ms=round(duration_ms, 2)
+            )
+            
+            # Add request ID to response headers
+            response.headers["X-Request-ID"] = request_id
+            return response
+            
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(
+                f"Request failed: {request.method} {request.url.path}",
+                error=str(e),
+                error_type=type(e).__name__,
+                duration_ms=round(duration_ms, 2)
+            )
+            raise
 
 # Create v1 API router
 v1_router = APIRouter(prefix="/v1", tags=["v1"])
@@ -1036,7 +1079,12 @@ async def import_policy(
         POLICY_HISTORY = POLICY_HISTORY[-MAX_POLICY_HISTORY:]
     
     prom_metrics.record_policy_update(imported_policy.id)
-    logger.info(f"Policy '{imported_policy.id}' imported successfully by {admin}")
+    logger.info(
+        f"Policy '{imported_policy.id}' imported successfully by {admin}",
+        policy_id=imported_policy.id,
+        num_rules=len(imported_policy.rules),
+        admin=admin
+    )
     
     return {
         "imported": True,
@@ -1464,7 +1512,14 @@ async def set_policy(
         POLICY_HISTORY = POLICY_HISTORY[-MAX_POLICY_HISTORY:]
     
     prom_metrics.record_policy_update(req.policy.id)
-    logger.info(f"Policy '{req.policy.id}' updated with {len(req.policy.rules)} rules by {admin}")
+    logger.info(
+        f"Policy '{req.policy.id}' updated with {len(req.policy.rules)} rules by {admin}",
+        policy_id=req.policy.id,
+        num_rules=len(req.policy.rules),
+        merge_strategy=req.policy.merge_strategy,
+        admin=admin,
+        has_warnings=len(warnings) > 0
+    )
     
     return POLICY
 
@@ -1730,7 +1785,19 @@ async def simulate_policy(request: Request, req: SimulateRequest):
     test_signals = [_convert_signal_in_to_signal(sig_in) for sig_in in req.test_signals]
     
     # Evaluate signals against policy
+    start_time = time.time()
     results = simulator.evaluate_batch(req.policy, test_signals)
+    eval_duration_ms = (time.time() - start_time) * 1000
+    
+    # Log simulation metrics
+    logger.info(
+        "Policy simulation completed",
+        policy_id=req.policy.id,
+        num_signals=len(test_signals),
+        num_rules=len(req.policy.rules),
+        signals_with_matches=sum(1 for r in results if r.rule_count > 0),
+        evaluation_time_ms=round(eval_duration_ms, 2)
+    )
     
     # Build response
     return create_simulation_response(results, req.policy.id, len(test_signals))
@@ -1935,7 +2002,19 @@ async def replay_signals(request: Request, req: ReplayRequest):
     
     # Replay signals against policy
     policy_ts = datetime.fromisoformat(req.policy_timestamp.replace(' ', '+').replace('Z', '+00:00')) if req.policy_timestamp else None
+    
+    start_time = time.time()
     replay_results = simulator.replay_with_historical_policy(replay_signals, policy_to_use, policy_ts)
+    replay_duration_ms = (time.time() - start_time) * 1000
+    
+    # Log replay metrics
+    logger.info(
+        "Signal replay completed",
+        num_signals=len(replay_signals),
+        policy_type=policy_info["using"],
+        policy_id=policy_to_use.id,
+        replay_time_ms=round(replay_duration_ms, 2)
+    )
     
     # Add policy info to results
     replay_results["policy_info"] = policy_info
@@ -2035,7 +2114,20 @@ async def compare_policies(request: Request, req: CompareRequest):
     ]
     
     # Compare signals across policies
-    return simulator.compare_evaluations(policies_with_labels, test_signals)
+    start_time = time.time()
+    comparison_results = simulator.compare_evaluations(policies_with_labels, test_signals)
+    compare_duration_ms = (time.time() - start_time) * 1000
+    
+    # Log comparison metrics
+    logger.info(
+        "Policy comparison completed",
+        num_signals=len(test_signals),
+        num_policies=len(policies_with_labels),
+        signals_with_differences=comparison_results["summary"].get("signals_with_differences", 0),
+        comparison_time_ms=round(compare_duration_ms, 2)
+    )
+    
+    return comparison_results
 
 
 @v1_router.get("/signals/export")
@@ -2172,6 +2264,17 @@ async def ingest_signal(
     buf = SIGNALS.setdefault(key, [])
     buf.append(s)
     
+    # Log signal ingestion with context
+    logger.debug(
+        "Signal ingested",
+        service=s.service,
+        environment=s.environment,
+        latency_ms=s.latency_ms,
+        error=s.error,
+        buffer_size=len(buf),
+        has_timestamp=sig.timestamp is not None
+    )
+    
     # Record signal metrics
     prom_metrics.record_signal_metrics(
         s.service,
@@ -2181,7 +2284,19 @@ async def ingest_signal(
     )
     
     _prune(key)
-    return evaluate(s.service, s.environment)
+    effective_config = evaluate(s.service, s.environment)
+    
+    # Log evaluation result
+    logger.debug(
+        "Configuration evaluated",
+        service=s.service,
+        environment=s.environment,
+        log_level=effective_config.log_level,
+        trace_sample_rate=effective_config.trace_sample_rate,
+        metric_period_s=effective_config.metric_period_s
+    )
+    
+    return effective_config
 
 
 @v1_router.get("/config/{service}/{environment}", response_model=EffectiveConfig)
