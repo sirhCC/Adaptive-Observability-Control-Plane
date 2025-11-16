@@ -26,7 +26,7 @@ class ControlPlaneException(Exception):
 class PolicyValidationError(ControlPlaneException):
     """Raised when policy validation fails."""
     
-    def __init__(self, message: str, conflicts: list = None):
+    def __init__(self, message: str, conflicts: Optional[list[Any]] = None):
         super().__init__(
             message=message,
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -48,7 +48,7 @@ class PolicyNotFoundError(ControlPlaneException):
 class SignalProcessingError(ControlPlaneException):
     """Raised when signal processing fails."""
     
-    def __init__(self, message: str, signal_data: Optional[Dict] = None):
+    def __init__(self, message: str, signal_data: Optional[Dict[str, Any]] = None):
         super().__init__(
             message=message,
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -172,7 +172,7 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
     )
 
 
-def register_exception_handlers(app):
+def register_exception_handlers(app: Any) -> None:
     """Register all exception handlers with the FastAPI app."""
     app.add_exception_handler(ControlPlaneException, control_plane_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)

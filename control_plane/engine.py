@@ -255,7 +255,7 @@ def _apply_action_merge(effective: EffectiveConfig, action: Action, strategy: Me
         effective.metric_period_s = _merge_int(effective.metric_period_s, action.metric_period_s, strategy)
 
 
-def _eval_condition(cond: Condition, signal: Signal, aggs: dict) -> bool:
+def _eval_condition(cond: Condition, signal: Signal, aggs: Dict[str, float]) -> bool:
     """Evaluate a single condition against a signal and aggregates."""
     if cond.kind == "always" or cond.op == "always":
         return True

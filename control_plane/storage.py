@@ -8,7 +8,7 @@ This module manages:
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from loguru import logger
 
