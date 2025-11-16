@@ -14,6 +14,8 @@ import re
 
 from pydantic import BaseModel, Field, field_validator
 
+from control_plane import validators
+
 
 # Constants for validation
 MAX_SERVICE_NAME_LEN = 64
@@ -140,38 +142,19 @@ class SignalIn(BaseModel):
     @classmethod
     def validate_name(cls, v: str) -> str:
         """Validate service and environment names contain only allowed characters."""
-        if not VALID_NAME_PATTERN.match(v):
-            raise ValueError(f"Name must contain only alphanumeric, underscore, and hyphen characters: {v}")
-        return v
+        return validators.validate_name_pattern(v)
     
     @field_validator('attrs')
     @classmethod
     def validate_attrs(cls, v: Dict[str, str]) -> Dict[str, str]:
         """Validate attribute key/value sizes."""
-        for key, value in v.items():
-            if len(key) > 128 or len(value) > 1024:
-                raise ValueError("Attribute keys must be ≤128 chars, values ≤1024 chars")
-        return v
+        return validators.validate_attributes(v)
     
     @field_validator('timestamp')
     @classmethod
     def validate_timestamp(cls, v: Optional[datetime]) -> Optional[datetime]:
         """Validate timestamp is within reasonable bounds (7 days past, 1 day future)."""
-        if v is not None:
-            now = datetime.now(timezone.utc)
-            max_past = now - timedelta(days=7)
-            max_future = now + timedelta(days=1)
-            
-            # Handle timezone-naive timestamps
-            if v.tzinfo is None:
-                v = v.replace(tzinfo=timezone.utc)
-            
-            if v < max_past:
-                raise ValueError("Timestamp cannot be more than 7 days in the past")
-            if v > max_future:
-                raise ValueError("Timestamp cannot be more than 1 day in the future")
-        
-        return v
+        return validators.validate_timestamp(v)
 
 
 class EffectiveConfig(BaseModel):

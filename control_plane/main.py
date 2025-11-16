@@ -50,6 +50,7 @@ from control_plane.auth import require_admin_key, get_api_key, get_optional_api_
 from control_plane import metrics as prom_metrics
 from control_plane import constants
 from control_plane import exporters
+from control_plane import validators
 from control_plane.policy_simulator import PolicySimulator, create_simulation_response
 from control_plane.exceptions import (
     register_exception_handlers,
@@ -1555,37 +1556,17 @@ class SignalIn(BaseModel):
     @field_validator('service', 'environment')
     @classmethod
     def validate_name(cls, v: str) -> str:
-        if not VALID_NAME_PATTERN.match(v):
-            raise ValueError(f"Name must contain only alphanumeric, underscore, and hyphen characters: {v}")
-        return v
+        return validators.validate_name_pattern(v)
     
     @field_validator('attrs')
     @classmethod
     def validate_attrs(cls, v: Dict[str, str]) -> Dict[str, str]:
-        for key, value in v.items():
-            if len(key) > 128 or len(value) > 1024:
-                raise ValueError("Attribute keys must be ≤128 chars, values ≤1024 chars")
-        return v
+        return validators.validate_attributes(v)
     
     @field_validator('timestamp')
     @classmethod
     def validate_timestamp(cls, v: Optional[datetime]) -> Optional[datetime]:
-        if v is not None:
-            # Reject timestamps more than 7 days in the past or future
-            now = datetime.now(timezone.utc)
-            max_past = now - timedelta(days=7)
-            max_future = now + timedelta(days=1)
-            
-            # Ensure timezone-aware comparison
-            if v.tzinfo is None:
-                v = v.replace(tzinfo=timezone.utc)
-            
-            if v < max_past:
-                raise ValueError("Timestamp cannot be more than 7 days in the past")
-            if v > max_future:
-                raise ValueError("Timestamp cannot be more than 1 day in the future")
-        
-        return v
+        return validators.validate_timestamp(v)
 
 
 class SimulateRequest(BaseModel):

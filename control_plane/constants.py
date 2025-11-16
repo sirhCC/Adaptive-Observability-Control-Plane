@@ -38,10 +38,10 @@ VALID_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 MAX_SIGNAL_ATTRS = 20
 """Maximum number of attributes allowed per signal."""
 
-MAX_ATTR_KEY_LEN = 64
+MAX_ATTR_KEY_LEN = 128
 """Maximum length for attribute keys."""
 
-MAX_ATTR_VALUE_LEN = 256
+MAX_ATTR_VALUE_LEN = 1024
 """Maximum length for attribute values."""
 
 
