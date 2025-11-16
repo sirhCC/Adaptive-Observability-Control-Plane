@@ -4,10 +4,10 @@
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-1.0+-009688.svg)](https://fastapi.tiangolo.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-263%20passed-success)]()
+[![Tests](https://img.shields.io/badge/tests-287%20passed-success)]()
 [![Coverage](https://img.shields.io/badge/coverage-%3E80%25-brightgreen)]()
 
-A **production-ready** control plane for adaptive observability that dynamically adjusts logging levels, trace sampling rates, and metric collection based on real-time service behavior. Battle-tested with 289 comprehensive tests and 85% feature completion.
+A **production-ready** control plane for adaptive observability that dynamically adjusts logging levels, trace sampling rates, and metric collection based on real-time service behavior. Battle-tested with 313 comprehensive tests and 100% feature complete.
 
 ## ✨ Features
 
@@ -41,6 +41,7 @@ A **production-ready** control plane for adaptive observability that dynamically
 - ✅ **Signal Replay** - Time-travel debugging with historical policy comparison
 - ✅ **Policy Export/Import** - YAML/JSON support for GitOps workflows
 - ✅ **313 Comprehensive Tests** (287 passed, 26 skipped) - >80% code coverage
+- ✅ **Clean Modular Architecture** - 816 lines extracted into focused modules
 
 ### 🎉 Production Ready
 
@@ -54,7 +55,7 @@ A **production-ready** control plane for adaptive observability that dynamically
 - ✅ **Scalable architecture** - Database persistence, async operations, efficient aggregations
 - ✅ **Developer friendly** - OpenAPI docs, policy validation, simulation endpoints
 
-**Recent additions:** Feature flag support (LaunchDarkly, Split.io, custom HTTP), action merge strategies, signal replay with time-travel debugging, comprehensive policy validation, **flexible pattern matching** (wildcards, glob patterns, regex) for service/environment targeting, **comprehensive code documentation** (type hints, detailed docstrings on all 28 functions/endpoints), and **modular architecture** (extracted 816 lines into focused modules for maintainability).
+**Recent additions:** Feature flag support (LaunchDarkly, Split.io, custom HTTP), action merge strategies, signal replay with time-travel debugging, comprehensive policy validation, **flexible pattern matching** (wildcards, glob patterns, regex) for service/environment targeting, **comprehensive code documentation** (type hints, detailed docstrings on all 28 functions/endpoints), and **clean modular architecture** (816 lines extracted into `schemas.py`, `engine.py`, `storage.py` for improved maintainability and testability).
 
 ---
 
@@ -150,7 +151,7 @@ pytest --cov=control_plane --cov-report=html
 - **Feature flags** (16 tests)
 - Edge cases & window filtering
 
-**Code Coverage**: >80% with extensive edge case testing and error handling validation.
+**Total: 313 tests** (287 passed, 26 skipped) across 11 test files with **>80% code coverage**. Extensive edge case testing and error handling validation ensure production readiness.
 
 ---
 
