@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import Response
-from typing import Literal
+from typing import Literal, Optional
 import yaml
 from loguru import logger
 
@@ -12,36 +12,43 @@ from control_plane import metrics as prom_metrics
 from control_plane.exceptions import PolicyValidationError
 from control_plane.pattern_matching import validate_pattern
 
-router = APIRouter(tags=["policy"])
-
-# Lazy imports to avoid circular dependencies - access main module attributes at runtime
+# Lazy imports to avoid circular dependencies
 def _get_main():
     import control_plane.main as main
     return main
 
+# Get models for type annotations (FastAPI needs them at import time)
+def _get_models():
+    main = _get_main()
+    return main.Policy, main.UpsertPolicy, main.PolicyVersion
+    
+Policy, UpsertPolicy, PolicyVersion = _get_models()
+
+router = APIRouter(tags=["policy"])
+
 
 @router.get("/policy", response_model=Policy)
-@limiter.limit(constants.RATE_LIMIT_GET_POLICY)
 async def get_policy(request: Request):
     """Get the current active policy configuration."""
-    if policy_service:
-        return policy_service.get_current_policy()
-    return POLICY
+    main = _get_main()
+    if main.policy_service:
+        return main.policy_service.get_current_policy()
+    return main.POLICY
 
 
 @router.get("/policy/export")
-@limiter.limit(constants.RATE_LIMIT_EXPORT_POLICY)
 async def export_policy(
     request: Request,
     format: Literal["json", "yaml"] = "json",
     include_history: bool = False
 ):
     """Export current policy configuration in JSON or YAML format."""
+    main = _get_main()
     export_data = exporters.create_policy_export_data(
-        policy=POLICY,
-        exported_at=_now(),
+        policy=main.POLICY,
+        exported_at=main._now(),
         include_history=include_history,
-        policy_history=POLICY_HISTORY if include_history else None
+        policy_history=main.POLICY_HISTORY if include_history else None
     )
     
     if format == "yaml":
@@ -49,19 +56,18 @@ async def export_policy(
         return Response(
             content=content,
             media_type="application/x-yaml",
-            headers={"Content-Disposition": f"attachment; filename=policy-{POLICY.id}.yaml"}
+            headers={"Content-Disposition": f"attachment; filename=policy-{main.POLICY.id}.yaml"}
         )
     else:
         content = exporters.export_policy_to_json(export_data)
         return Response(
             content=content,
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=policy-{POLICY.id}.json"}
+            headers={"Content-Disposition": f"attachment; filename=policy-{main.POLICY.id}.json"}
         )
 
 
 @router.post("/policy/import")
-@limiter.limit(constants.RATE_LIMIT_IMPORT_POLICY)
 async def import_policy(
     request: Request,
     admin: str = Depends(require_admin_key),
@@ -69,7 +75,7 @@ async def import_policy(
 ):
     """Import policy configuration from JSON or YAML."""
     from control_plane.rule_validator import validate_policy_rules
-    from control_plane.main import POLICY as POLICY_REF, POLICY_HISTORY as HISTORY_REF
+    main = _get_main()
     
     body_bytes = await request.body()
     body_str = body_bytes.decode('utf-8')
@@ -134,13 +140,13 @@ async def import_policy(
     
     version = PolicyVersion(
         policy=imported_policy.model_copy(deep=True),
-        applied_at=_now(),
+        applied_at=main._now(),
         applied_by=admin
     )
     main_module.POLICY_HISTORY.append(version)
     
-    if len(main_module.POLICY_HISTORY) > MAX_POLICY_HISTORY:
-        main_module.POLICY_HISTORY = main_module.POLICY_HISTORY[-MAX_POLICY_HISTORY:]
+    if len(main_module.POLICY_HISTORY) > main.MAX_POLICY_HISTORY:
+        main_module.POLICY_HISTORY = main_module.POLICY_HISTORY[-main.MAX_POLICY_HISTORY:]
     
     prom_metrics.record_policy_update(imported_policy.id)
     logger.info(
@@ -158,11 +164,11 @@ async def import_policy(
 
 
 @router.get("/policy/templates")
-@limiter.limit(constants.RATE_LIMIT_TEMPLATES)
 async def get_policy_templates(request: Request):
     """Get policy templates/presets for common scenarios."""
-    if policy_service:
-        return policy_service.get_default_templates()
+    main = _get_main()
+    if main.policy_service:
+        return main.policy_service.get_default_templates()
     
     # Fallback templates
     templates = {
@@ -376,7 +382,6 @@ async def get_policy_templates(request: Request):
 
 
 @router.get("/policy/templates/{template_name}")
-@limiter.limit("50/minute")
 async def get_policy_template(request: Request, template_name: str):
     """Get a specific policy template by name."""
     templates_response = await get_policy_templates(request)
@@ -402,8 +407,7 @@ async def get_policy_template(request: Request, template_name: str):
 
 
 @router.post("/policy/validate")
-@limiter.limit(constants.RATE_LIMIT_VALIDATE_POLICY)
-async def validate_policy(request: Request, req: UpsertPolicy):
+async def validate_policy_endpoint(request: Request, req: UpsertPolicy):
     """Validate a policy configuration without applying it."""
     from control_plane.rule_validator import validate_policy_rules
     
@@ -443,7 +447,6 @@ async def validate_policy(request: Request, req: UpsertPolicy):
 
 
 @router.post("/policy")
-@limiter.limit(constants.RATE_LIMIT_SET_POLICY)
 async def set_policy(
     request: Request,
     req: UpsertPolicy,
@@ -452,6 +455,7 @@ async def set_policy(
 ):
     """Update the active policy configuration."""
     from control_plane.rule_validator import validate_policy_rules
+    main = _get_main()
     import control_plane.main as main_module
     
     if not req.policy.rules:
@@ -493,11 +497,11 @@ async def set_policy(
             "message": "Policy is valid and can be applied"
         }
     
-    if policy_service:
+    if main.policy_service:
         try:
-            result = policy_service.update_policy(req.policy, updated_by=admin)
+            result = main.policy_service.update_policy(req.policy, updated_by=admin)
             prom_metrics.record_policy_update(req.policy.id)
-            return policy_service.get_current_policy()
+            return main.policy_service.get_current_policy()
         except Exception as e:
             logger.error(f"Policy update via service failed: {e}")
             raise
@@ -506,13 +510,13 @@ async def set_policy(
         
         version = PolicyVersion(
             policy=req.policy.model_copy(deep=True),
-            applied_at=_now(),
+            applied_at=main._now(),
             applied_by=admin
         )
         main_module.POLICY_HISTORY.append(version)
         
-        if len(main_module.POLICY_HISTORY) > MAX_POLICY_HISTORY:
-            main_module.POLICY_HISTORY = main_module.POLICY_HISTORY[-MAX_POLICY_HISTORY:]
+        if len(main_module.POLICY_HISTORY) > main.MAX_POLICY_HISTORY:
+            main_module.POLICY_HISTORY = main_module.POLICY_HISTORY[-main.MAX_POLICY_HISTORY:]
         
         prom_metrics.record_policy_update(req.policy.id)
         logger.info(
@@ -528,7 +532,6 @@ async def set_policy(
 
 
 @router.get("/history/policy")
-@limiter.limit(constants.RATE_LIMIT_HISTORY)
 async def get_policy_history(
     request: Request,
     limit: int = 10,
@@ -536,8 +539,9 @@ async def get_policy_history(
     until: Optional[str] = None
 ):
     """Get policy version history for time-travel debugging."""
-    from control_plane.main import POLICY_HISTORY
+    main = _get_main()
     from datetime import datetime, timezone
+    POLICY_HISTORY = main.POLICY_HISTORY
     
     filtered_history = POLICY_HISTORY
     
@@ -561,49 +565,52 @@ async def get_policy_history(
     return {
         "versions": [
             {
-                "policy_id": v.policy.id,
-                "description": v.policy.description,
-                "num_rules": len(v.policy.rules),
+                "policy": v.policy.model_dump(),
                 "applied_at": v.applied_at.isoformat(),
-                "applied_by": v.applied_by,
-                "policy": v.policy.model_dump()
+                "applied_by": v.applied_by
             }
             for v in limited_history
         ],
-        "total_versions": len(POLICY_HISTORY),
-        "showing": len(limited_history)
+        "count": len(limited_history),
+        "total_in_history": len(POLICY_HISTORY)
     }
 
 
 @router.get("/history/policy/at")
-@limiter.limit(constants.RATE_LIMIT_HISTORY)
 async def get_policy_at_time(
     request: Request,
     timestamp: str
 ):
     """Get the policy that was active at a specific time."""
-    from control_plane.main import POLICY_HISTORY, POLICY
+    main = _get_main()
     from datetime import datetime
+    POLICY_HISTORY = main.POLICY_HISTORY
+    POLICY = main.POLICY
     
     try:
-        query_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid timestamp format. Use ISO 8601 format.")
+        # Handle various ISO 8601 formats
+        timestamp_fixed = timestamp.replace(' ', '+').replace('Z', '+00:00')
+        query_time = datetime.fromisoformat(timestamp_fixed)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid timestamp format. Use ISO 8601 format. Error: {str(e)}")
     
     applicable_versions = [v for v in POLICY_HISTORY if v.applied_at <= query_time]
     
-    if not applicable_versions:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No policy version found before {timestamp}"
-        )
-    
-    policy_at_time = max(applicable_versions, key=lambda v: v.applied_at)
-    
-    return {
-        "policy": policy_at_time.policy.model_dump(),
-        "applied_at": policy_at_time.applied_at.isoformat(),
-        "applied_by": policy_at_time.applied_by,
-        "query_time": query_time.isoformat(),
-        "note": "This is the policy that was active at the requested time"
-    }
+    if applicable_versions:
+        # Get the most recent one
+        policy_at_time = max(applicable_versions, key=lambda v: v.applied_at)
+        return {
+            "policy": policy_at_time.policy.model_dump(),
+            "applied_at": policy_at_time.applied_at.isoformat(),
+            "applied_by": policy_at_time.applied_by,
+            "query_time": query_time.isoformat()
+        }
+    else:
+        # No history before this time, return current policy
+        return {
+            "policy": POLICY.model_dump(),
+            "applied_at": None,
+            "applied_by": None,
+            "query_time": query_time.isoformat(),
+            "note": "No policy history available before this time, returning current policy"
+        }

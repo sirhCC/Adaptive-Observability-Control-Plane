@@ -1995,16 +1995,18 @@ async def compare_policies(request: Request, req: CompareRequest):
 
 
 
-# Register modular routers (health, auth, config, and signal are fully migrated)
+# Register modular routers (health, auth, config, signal, and policy are fully migrated)
 from control_plane.routers.health import router as health_router
 from control_plane.routers.auth import router as auth_router
 from control_plane.routers.config import router as config_router
 from control_plane.routers.signal import router as signal_router
+from control_plane.routers.policy import router as policy_router
 
 app.include_router(health_router, prefix="/v1", tags=["v1"])
 app.include_router(auth_router, prefix="/v1", tags=["v1"])
 app.include_router(config_router, prefix="/v1", tags=["v1"])
 app.include_router(signal_router, prefix="/v1", tags=["v1"])
+app.include_router(policy_router, prefix="/v1", tags=["v1"])
 
 # Include v1 API router for remaining endpoints (will be gradually migrated)
 app.include_router(v1_router)
