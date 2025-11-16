@@ -2,7 +2,7 @@
 
 This document tracks code quality improvements, refactoring tasks, and technical debt for the Adaptive Observability Control Plane.
 
-**Status:** 3 of 10 tasks complete (30%)
+**Status:** 5 of 10 tasks complete (50%)
 
 **Last Updated:** November 15, 2025
 
@@ -102,7 +102,7 @@ This document tracks code quality improvements, refactoring tasks, and technical
 ## 🔨 Medium Effort Improvements
 
 ### 4. Break Down `simulate_policy()` Function 🔧
-**Status:** ❌ Not Started  
+**Status:** ✅ COMPLETED (2025-11-15)  
 **Priority:** Medium  
 **Estimated Effort:** 1.5 hours  
 **Impact:** Improves readability and testability
@@ -130,7 +130,7 @@ This document tracks code quality improvements, refactoring tasks, and technical
 ---
 
 ### 5. Extract CSV/JSON Export Helpers 📊
-**Status:** ❌ Not Started  
+**Status:** ✅ COMPLETED (2025-11-15)  
 **Priority:** Medium  
 **Estimated Effort:** 1 hour  
 **Impact:** Reusable export functionality
@@ -337,9 +337,9 @@ This document tracks code quality improvements, refactoring tasks, and technical
 | Category | Total | Complete | In Progress | Not Started |
 |----------|-------|----------|-------------|-------------|
 | Quick Wins | 3 | 3 | 0 | 0 |
-| Medium Effort | 4 | 0 | 0 | 4 |
+| Medium Effort | 4 | 2 | 0 | 2 |
 | Bigger Refactors | 3 | 0 | 0 | 3 |
-| **Overall** | **10** | **3** | **0** | **7** |
+| **Overall** | **10** | **5** | **0** | **5** |
 
 ---
 
