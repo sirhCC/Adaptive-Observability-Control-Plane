@@ -766,6 +766,7 @@ class UpsertPolicy(BaseModel):
     policy: Policy
 
 
+
 @v1_router.get("/healthz")
 async def healthz(db: AsyncSession = Depends(get_db)):
     """Health check endpoint with component status.
@@ -815,8 +816,7 @@ async def healthz(db: AsyncSession = Depends(get_db)):
 
 @v1_router.get("/readyz")
 async def readyz(db: AsyncSession = Depends(get_db)):
-    """
-    Readiness check endpoint for Kubernetes/Docker.
+    """Readiness check endpoint for Kubernetes/Docker.
     
     Returns 200 if service is ready to accept traffic, 503 otherwise.
     Checks critical dependencies like database connectivity.
@@ -2128,6 +2128,7 @@ async def compare_policies(request: Request, req: CompareRequest):
     )
     
     return comparison_results
+
 
 
 @v1_router.get("/signals/export")
