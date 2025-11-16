@@ -228,41 +228,35 @@ This document tracks code quality improvements, refactoring tasks, and technical
 ## 🏗️ Bigger Refactoring Projects
 
 ### 8. Split Main Router into Multiple Modules 📦
-**Status:** ❌ Not Started  
+**Status:** ❌ Deferred - Requires Architecture Changes  
 **Priority:** Medium  
-**Estimated Effort:** 3 hours  
-**Impact:** Better code organization for large file (2148 lines)
+**Estimated Effort:** 6+ hours (needs service layer pattern first)  
+**Impact:** Better code organization for large file (~2000 lines)
 
 **Current Issue:**
-- `main.py` is 2148 lines - too large for easy navigation
-- All routes in single file makes it hard to find specific endpoints
-- Violates single responsibility principle
+- `main.py` is ~2000 lines - still large but improved from 2335
+- All routes in single file makes navigation harder
+- Tightly coupled global state prevents easy module splitting
 
-**Proposed Solution:**
-- Split into focused router modules:
-  - `control_plane/routers/health.py` - healthz, readyz, metrics
-  - `control_plane/routers/policy.py` - policy CRUD, templates, validation
-  - `control_plane/routers/signals.py` - signal ingestion, export
-  - `control_plane/routers/simulation.py` - simulate, replay, compare
-  - `control_plane/routers/admin.py` - admin endpoints, keys
-- Keep main.py as app initialization and router registration
+**Why Deferred:**
+- Attempted router splitting failed due to circular dependencies
+- FastAPI request validation requires models at import time
+- Global state (POLICY, SIGNALS, evaluate, etc.) creates tight coupling
+- Would need Task #9 (Service Layer Pattern) first to properly decouple
 
-**Files to Create:**
-- `control_plane/routers/__init__.py`
-- `control_plane/routers/health.py`
-- `control_plane/routers/policy.py`
-- `control_plane/routers/signals.py`
-- `control_plane/routers/simulation.py`
-- `control_plane/routers/admin.py`
+**Recommended Approach:**
+1. First implement Service Layer Pattern (Task #9)
+2. Extract business logic from route handlers
+3. Then split routers with dependency injection of service layer
+4. This creates clean separation without circular dependencies
 
-**Files to Modify:**
-- `control_plane/main.py` - Slim down to app setup only
-
-**Benefits:**
+**Benefits After Proper Implementation:**
 - Easier navigation and code discovery
 - Clear separation of concerns
-- Easier for teams to work in parallel
-- Follows FastAPI best practices
+- Testable business logic independent of HTTP layer
+- Follows FastAPI and clean architecture best practices
+
+**Note:** Current refactoring has already reduced main.py by 443 lines (19%) through other improvements
 
 ---
 
