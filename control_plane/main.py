@@ -48,6 +48,7 @@ from control_plane.repository import PolicyRepository, SignalRepository
 from control_plane.auth import require_admin_key, get_api_key, get_optional_api_key
 from control_plane import metrics as prom_metrics
 from control_plane import constants
+from control_plane import exporters
 from control_plane.exceptions import (
     register_exception_handlers,
     PolicyValidationError,
@@ -903,30 +904,26 @@ async def export_policy(
     Returns:
         Policy configuration in requested format
     """
-    export_data = {
-        "policy": json.loads(POLICY.model_dump_json()),  # Use JSON serialization for proper enum handling
-        "exported_at": _now().isoformat(),
-        "version": "1.0"
-    }
+    # Create export data structure
+    export_data = exporters.create_policy_export_data(
+        policy=POLICY,
+        exported_at=_now(),
+        include_history=include_history,
+        policy_history=POLICY_HISTORY if include_history else None
+    )
     
-    if include_history and POLICY_HISTORY:
-        export_data["history"] = {
-            "versions_available": len(POLICY_HISTORY),
-            "oldest_version": POLICY_HISTORY[0].applied_at.isoformat() if POLICY_HISTORY else None,
-            "newest_version": POLICY_HISTORY[-1].applied_at.isoformat() if POLICY_HISTORY else None
-        }
-    
+    # Export to requested format
     if format == "yaml":
-        yaml_content = yaml.dump(export_data, default_flow_style=False, sort_keys=False)
+        content = exporters.export_policy_to_yaml(export_data)
         return Response(
-            content=yaml_content,
+            content=content,
             media_type="application/x-yaml",
             headers={"Content-Disposition": f"attachment; filename=policy-{POLICY.id}.yaml"}
         )
     else:
-        json_content = json.dumps(export_data, indent=2)
+        content = exporters.export_policy_to_json(export_data)
         return Response(
-            content=json_content,
+            content=content,
             media_type="application/json",
             headers={"Content-Disposition": f"attachment; filename=policy-{POLICY.id}.json"}
         )
@@ -1559,6 +1556,149 @@ class CompareRequest(BaseModel):
     )
 
 
+def _convert_signal_in_to_signal(sig_in: SignalIn) -> Signal:
+    """Convert a SignalIn (request model) to a Signal with timestamp.
+    
+    Args:
+        sig_in: Input signal from API request
+        
+    Returns:
+        Signal with current timestamp
+    """
+    return Signal(
+        service=sig_in.service,
+        environment=sig_in.environment,
+        ts=_now(),
+        latency_ms=sig_in.latency_ms,
+        error=sig_in.error,
+        attrs=sig_in.attrs,
+    )
+
+
+def _evaluate_rule_conditions(rule: Rule, signal: Signal, agg: Dict[str, float]) -> tuple[bool, list[dict]]:
+    """Evaluate all conditions for a rule and return match status with details.
+    
+    Args:
+        rule: Rule to evaluate
+        signal: Signal to evaluate against
+        agg: Aggregated metrics
+        
+    Returns:
+        Tuple of (matched, condition_results)
+    """
+    match = True
+    condition_results = []
+    
+    for cond in rule.conditions:
+        cond_match = _eval_condition(cond, signal, agg)
+        condition_results.append({
+            "kind": cond.kind,
+            "op": cond.op,
+            "matched": cond_match,
+            "key": cond.key,
+            "value": cond.value
+        })
+        if not cond_match:
+            match = False
+            break
+    
+    return match, condition_results
+
+
+def _match_rules_for_signal(policy: Policy, signal: Signal, agg: Dict[str, float]) -> tuple[list[dict], EffectiveConfig]:
+    """Find all matching rules for a signal and compute effective configuration.
+    
+    Args:
+        policy: Policy containing rules
+        signal: Signal to evaluate
+        agg: Aggregated metrics
+        
+    Returns:
+        Tuple of (matched_rules, effective_config)
+    """
+    matched_rules = []
+    effective_config = EffectiveConfig(
+        service=signal.service,
+        environment=signal.environment
+    )
+    
+    for rule in policy.rules:
+        if not rule.enabled:
+            continue
+            
+        # Check if rule scope matches with pattern support
+        if not matches_service_pattern(signal.service, rule.service):
+            continue
+        if not matches_environment_pattern(signal.environment, rule.environment):
+            continue
+        
+        # Evaluate conditions
+        match, condition_results = _evaluate_rule_conditions(rule, signal, agg)
+        
+        if match:
+            matched_rules.append({
+                "rule_id": rule.id,
+                "priority": rule.priority,
+                "description": rule.description,
+                "conditions": condition_results,
+                "actions": rule.actions.model_dump(exclude_none=True),
+                "merge_strategy": rule.merge_strategy or policy.merge_strategy
+            })
+            
+            # Apply actions using merge strategy
+            strategy = rule.merge_strategy if rule.merge_strategy is not None else policy.merge_strategy
+            _apply_action_merge(effective_config, rule.actions, strategy)
+    
+    return matched_rules, effective_config
+
+
+def _build_simulation_result(idx: int, signal: Signal, matched_rules: list[dict], effective_config: EffectiveConfig) -> dict:
+    """Build a single simulation result entry.
+    
+    Args:
+        idx: Signal index in the batch
+        signal: The evaluated signal
+        matched_rules: List of matched rule details
+        effective_config: Computed effective configuration
+        
+    Returns:
+        Simulation result dictionary
+    """
+    return {
+        "signal_index": idx,
+        "service": signal.service,
+        "environment": signal.environment,
+        "latency_ms": signal.latency_ms,
+        "error": signal.error,
+        "matched_rules": matched_rules,
+        "rule_count": len(matched_rules),
+        "effective_config": effective_config.model_dump()
+    }
+
+
+def _build_simulation_summary(results: list[dict], policy_id: str, total_signals: int) -> dict:
+    """Build the complete simulation response with summary statistics.
+    
+    Args:
+        results: List of individual simulation results
+        policy_id: ID of the simulated policy
+        total_signals: Total number of signals simulated
+        
+    Returns:
+        Complete simulation response dictionary
+    """
+    return {
+        "simulation_results": results,
+        "total_signals": total_signals,
+        "policy_id": policy_id,
+        "summary": {
+            "signals_with_matches": sum(1 for r in results if r["rule_count"] > 0),
+            "signals_without_matches": sum(1 for r in results if r["rule_count"] == 0),
+            "total_rule_matches": sum(r["rule_count"] for r in results)
+        }
+    }
+
+
 @v1_router.post("/policy/simulate")
 @limiter.limit(constants.RATE_LIMIT_SIMULATE)
 async def simulate_policy(request: Request, req: SimulateRequest):
@@ -1582,88 +1722,20 @@ async def simulate_policy(request: Request, req: SimulateRequest):
     
     for idx, sig_in in enumerate(req.test_signals):
         # Convert SignalIn to Signal
-        test_signal = Signal(
-            service=sig_in.service,
-            environment=sig_in.environment,
-            ts=_now(),
-            latency_ms=sig_in.latency_ms,
-            error=sig_in.error,
-            attrs=sig_in.attrs,
-        )
+        test_signal = _convert_signal_in_to_signal(sig_in)
         
         # Create mock buffer with just this signal for aggregates
         mock_buffer = [test_signal]
         agg = _calc_aggregates(mock_buffer)
         
         # Evaluate which rules would match
-        matched_rules = []
-        effective_config = EffectiveConfig(
-            service=test_signal.service,
-            environment=test_signal.environment
-        )
+        matched_rules, effective_config = _match_rules_for_signal(req.policy, test_signal, agg)
         
-        for rule in req.policy.rules:
-            if not rule.enabled:
-                continue
-                
-            # Check if rule scope matches with pattern support
-            if not matches_service_pattern(test_signal.service, rule.service):
-                continue
-            if not matches_environment_pattern(test_signal.environment, rule.environment):
-                continue
-            
-            # Evaluate conditions
-            match = True
-            condition_results = []
-            
-            for cond in rule.conditions:
-                cond_match = _eval_condition(cond, test_signal, agg)
-                condition_results.append({
-                    "kind": cond.kind,
-                    "op": cond.op,
-                    "matched": cond_match,
-                    "key": cond.key,
-                    "value": cond.value
-                })
-                if not cond_match:
-                    match = False
-                    break
-            
-            if match:
-                matched_rules.append({
-                    "rule_id": rule.id,
-                    "priority": rule.priority,
-                    "description": rule.description,
-                    "conditions": condition_results,
-                    "actions": rule.actions.model_dump(exclude_none=True),
-                    "merge_strategy": rule.merge_strategy or req.policy.merge_strategy
-                })
-                
-                # Apply actions using merge strategy
-                strategy = rule.merge_strategy if rule.merge_strategy is not None else req.policy.merge_strategy
-                _apply_action_merge(effective_config, rule.actions, strategy)
-        
-        results.append({
-            "signal_index": idx,
-            "service": test_signal.service,
-            "environment": test_signal.environment,
-            "latency_ms": test_signal.latency_ms,
-            "error": test_signal.error,
-            "matched_rules": matched_rules,
-            "rule_count": len(matched_rules),
-            "effective_config": effective_config.model_dump()
-        })
+        # Build result entry
+        result = _build_simulation_result(idx, test_signal, matched_rules, effective_config)
+        results.append(result)
     
-    return {
-        "simulation_results": results,
-        "total_signals": len(req.test_signals),
-        "policy_id": req.policy.id,
-        "summary": {
-            "signals_with_matches": sum(1 for r in results if r["rule_count"] > 0),
-            "signals_without_matches": sum(1 for r in results if r["rule_count"] == 0),
-            "total_rule_matches": sum(r["rule_count"] for r in results)
-        }
-    }
+    return _build_simulation_summary(results, req.policy.id, len(req.test_signals))
 
 
 @v1_router.get("/history/policy")
@@ -2145,57 +2217,28 @@ async def export_signals(
         end_time_fixed = end_time.replace(' ', '+').replace('Z', '+00:00')
         end_dt = datetime.fromisoformat(end_time_fixed)
     
-    # Collect signals from buffer
-    exported_signals = []
+    # Filter and collect signals using export helper
+    exported_signals = exporters.filter_and_collect_signals(
+        signals_buffer=SIGNALS,
+        service=service,
+        environment=environment,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        limit=limit
+    )
     
-    for key, buffer in SIGNALS.items():
-        svc, env = key
-        
-        # Apply service/environment filters
-        if service and svc != service:
-            continue
-        if environment and env != environment:
-            continue
-        
-        # Filter and export signals
-        for signal in buffer:
-            # Apply time range filters
-            if start_dt and signal.ts < start_dt:
-                continue
-            if end_dt and signal.ts > end_dt:
-                continue
-            
-            exported_signals.append({
-                "service": signal.service,
-                "environment": signal.environment,
-                "timestamp": signal.ts.isoformat(),
-                "latency_ms": signal.latency_ms,
-                "error": signal.error,
-                "attrs": signal.attrs
-            })
-            
-            # Check limit
-            if len(exported_signals) >= limit:
-                break
-        
-        if len(exported_signals) >= limit:
-            break
-    
-    # Sort by timestamp
-    exported_signals.sort(key=lambda s: s["timestamp"])
-    
-    return {
-        "signals": exported_signals,
-        "count": len(exported_signals),
-        "filters": {
+    # Build export response
+    return exporters.create_signals_export_response(
+        signals=exported_signals,
+        filters={
             "service": service,
             "environment": environment,
             "start_time": start_time,
             "end_time": end_time,
             "limit": limit
         },
-        "export_time": _now().isoformat()
-    }
+        export_time=_now()
+    )
 
 
 @v1_router.post("/signal", response_model=EffectiveConfig)
