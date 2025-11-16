@@ -47,6 +47,7 @@ from control_plane.database import init_db, get_db
 from control_plane.repository import PolicyRepository, SignalRepository
 from control_plane.auth import require_admin_key, get_api_key, get_optional_api_key
 from control_plane import metrics as prom_metrics
+from control_plane import constants
 from control_plane.exceptions import (
     register_exception_handlers,
     PolicyValidationError,
@@ -62,25 +63,25 @@ from control_plane.pattern_matching import matches_service_pattern, matches_envi
 # - storage.py: State management (190 lines)
 # These modules provide reusable components while main.py maintains backward compatibility
 
-# Configuration
-MAX_SIGNALS_PER_SERVICE = 10000  # Max signals to keep per (service, env)
-MAX_SERVICE_NAME_LEN = 64
-MAX_ENV_NAME_LEN = 32
-VALID_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+# Configuration - Import from constants module
+MAX_SIGNALS_PER_SERVICE = constants.MAX_SIGNALS_PER_SERVICE
+MAX_SERVICE_NAME_LEN = constants.MAX_SERVICE_NAME_LEN
+MAX_ENV_NAME_LEN = constants.MAX_ENV_NAME_LEN
+VALID_NAME_PATTERN = constants.VALID_NAME_PATTERN
 
 # CORS Configuration
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
-CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
-CORS_ALLOW_METHODS = os.getenv("CORS_ALLOW_METHODS", "*").split(",")
-CORS_ALLOW_HEADERS = os.getenv("CORS_ALLOW_HEADERS", "*").split(",")
+CORS_ORIGINS = constants.CORS_ORIGINS
+CORS_ALLOW_CREDENTIALS = constants.CORS_ALLOW_CREDENTIALS
+CORS_ALLOW_METHODS = constants.CORS_ALLOW_METHODS
+CORS_ALLOW_HEADERS = constants.CORS_ALLOW_HEADERS
 
 # Shutdown Configuration
-SHUTDOWN_TIMEOUT = int(os.getenv("SHUTDOWN_TIMEOUT", "30"))  # seconds
+SHUTDOWN_TIMEOUT = constants.SHUTDOWN_TIMEOUT
 shutdown_event = asyncio.Event()
 
 # Feature Flag Configuration
-FF_PROVIDER = os.getenv("FF_PROVIDER", "static")  # static, launchdarkly, splitio, custom
-FF_CACHE_TTL = int(os.getenv("FF_CACHE_TTL", "60"))  # seconds
+FF_PROVIDER = constants.FF_PROVIDER
+FF_CACHE_TTL = constants.FF_CACHE_TTL
 
 
 # Lifespan context manager for startup and shutdown
@@ -676,6 +677,45 @@ def evaluate(service: str, env: str) -> EffectiveConfig:
 # Note: Startup and shutdown logic moved to lifespan context manager above
 
 
+# --- Health Check Helpers
+
+async def _check_database_health(db: AsyncSession) -> dict:
+    """Check database connectivity and return health status.
+    
+    Args:
+        db: Database session
+        
+    Returns:
+        Dictionary with health status and optional error message
+    """
+    try:
+        from sqlalchemy import text
+        await db.execute(text("SELECT 1"))
+        return {"status": "healthy", "error": None}
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        return {"status": "unhealthy", "error": str(e)}
+
+
+def _check_signal_buffer_health() -> dict:
+    """Check signal buffer status.
+    
+    Returns:
+        Dictionary with buffer health metrics
+    """
+    try:
+        total_signals = sum(len(buf) for buf in SIGNALS.values())
+        return {
+            "status": "healthy",
+            "total_signals": total_signals,
+            "services": len(SIGNALS),
+            "error": None
+        }
+    except Exception as e:
+        logger.error(f"Signal buffer health check failed: {e}")
+        return {"status": "unhealthy", "error": str(e)}
+
+
 # --- API
 class UpsertPolicy(BaseModel):
     policy: Policy
@@ -702,28 +742,24 @@ async def healthz(db: AsyncSession = Depends(get_db)):
     }
     
     # Check database connectivity
-    try:
-        # Simple query to verify database is accessible
-        from sqlalchemy import text
-        await db.execute(text("SELECT 1"))
-        health_status["components"]["database"] = "healthy"
-    except Exception as e:
-        health_status["components"]["database"] = "unhealthy"
+    db_health = await _check_database_health(db)
+    if db_health["status"] == "unhealthy":
         health_status["status"] = "degraded"
-        logger.error(f"Database health check failed: {e}")
+        health_status["components"]["database"] = "unhealthy"
+    else:
+        health_status["components"]["database"] = "healthy"
     
     # Check signal buffer status
-    try:
-        total_signals = sum(len(buf) for buf in SIGNALS.values())
+    buffer_health = _check_signal_buffer_health()
+    if buffer_health["status"] == "unhealthy":
+        health_status["status"] = "degraded"
+        health_status["components"]["signal_buffer"] = "unhealthy"
+    else:
         health_status["components"]["signal_buffer"] = {
             "status": "healthy",
-            "total_signals": total_signals,
-            "services": len(SIGNALS)
+            "total_signals": buffer_health["total_signals"],
+            "services": buffer_health["services"]
         }
-    except Exception as e:
-        health_status["components"]["signal_buffer"] = "unhealthy"
-        health_status["status"] = "degraded"
-        logger.error(f"Signal buffer health check failed: {e}")
     
     # Set HTTP status code based on health
     status_code = 200 if health_status["status"] == "healthy" else 503
@@ -747,20 +783,18 @@ async def readyz(db: AsyncSession = Depends(get_db)):
     }
     
     # Check database connectivity (critical for readiness)
-    try:
-        from sqlalchemy import text
-        await db.execute(text("SELECT 1"))
+    db_health = await _check_database_health(db)
+    if db_health["status"] == "unhealthy":
+        readiness_status["checks"]["database"] = {
+            "status": "not_ready",
+            "message": f"Database connection failed: {db_health['error']}"
+        }
+        readiness_status["ready"] = False
+    else:
         readiness_status["checks"]["database"] = {
             "status": "ready",
             "message": "Database connection successful"
         }
-    except Exception as e:
-        readiness_status["checks"]["database"] = {
-            "status": "not_ready",
-            "message": f"Database connection failed: {str(e)}"
-        }
-        readiness_status["ready"] = False
-        logger.error(f"Database readiness check failed: {e}")
     
     # Check if policy is initialized
     try:
@@ -812,7 +846,7 @@ async def metrics():
 
 
 @v1_router.post("/auth/generate-key")
-@limiter.limit("5/minute")
+@limiter.limit(constants.RATE_LIMIT_GENERATE_KEY)
 async def generate_key(
     request: Request,
     admin: str = Depends(require_admin_key),
@@ -839,7 +873,7 @@ async def generate_key(
 
 
 @v1_router.get("/policy", response_model=Policy)
-@limiter.limit("50/minute")
+@limiter.limit(constants.RATE_LIMIT_GET_POLICY)
 async def get_policy(request: Request):
     """Get the current active policy configuration.
     
@@ -852,7 +886,7 @@ async def get_policy(request: Request):
 
 
 @v1_router.get("/policy/export")
-@limiter.limit("20/minute")
+@limiter.limit(constants.RATE_LIMIT_EXPORT_POLICY)
 async def export_policy(
     request: Request,
     format: Literal["json", "yaml"] = "json",
@@ -899,7 +933,7 @@ async def export_policy(
 
 
 @v1_router.post("/policy/import")
-@limiter.limit("10/minute")
+@limiter.limit(constants.RATE_LIMIT_IMPORT_POLICY)
 async def import_policy(
     request: Request,
     admin: str = Depends(require_admin_key),
@@ -1014,7 +1048,7 @@ async def import_policy(
 
 
 @v1_router.get("/policy/templates")
-@limiter.limit("50/minute")
+@limiter.limit(constants.RATE_LIMIT_TEMPLATES)
 async def get_policy_templates(request: Request):
     """Get policy templates/presets for common scenarios.
     
@@ -1286,7 +1320,7 @@ async def get_policy_template(request: Request, template_name: str):
 
 
 @v1_router.post("/policy/validate")
-@limiter.limit("20/minute")
+@limiter.limit(constants.RATE_LIMIT_VALIDATE_POLICY)
 async def validate_policy(request: Request, req: UpsertPolicy):
     """Validate a policy configuration without applying it.
     
@@ -1341,7 +1375,7 @@ async def validate_policy(request: Request, req: UpsertPolicy):
     }
 
 @v1_router.post("/policy")
-@limiter.limit("10/minute")  # Strict limit on policy updates
+@limiter.limit(constants.RATE_LIMIT_SET_POLICY)  # Strict limit on policy updates
 async def set_policy(
     request: Request,
     req: UpsertPolicy,
@@ -1526,7 +1560,7 @@ class CompareRequest(BaseModel):
 
 
 @v1_router.post("/policy/simulate")
-@limiter.limit("20/minute")
+@limiter.limit(constants.RATE_LIMIT_SIMULATE)
 async def simulate_policy(request: Request, req: SimulateRequest):
     """Simulate policy evaluation with test signals.
     
@@ -2060,7 +2094,7 @@ async def compare_policies(request: Request, req: CompareRequest):
 
 
 @v1_router.get("/signals/export")
-@limiter.limit("20/minute")
+@limiter.limit(constants.RATE_LIMIT_EXPORT_SIGNALS)
 async def export_signals(
     request: Request,
     service: Optional[str] = None,
@@ -2235,7 +2269,7 @@ async def ingest_signal(
 
 
 @v1_router.get("/config/{service}/{environment}", response_model=EffectiveConfig)
-@limiter.limit("200/minute")  # 200 requests per minute per IP
+@limiter.limit(constants.RATE_LIMIT_GET_CONFIG)  # Higher limit - frequent operation
 async def get_config(request: Request, service: str, environment: str):
     """Get effective observability configuration for a service and environment.
     
