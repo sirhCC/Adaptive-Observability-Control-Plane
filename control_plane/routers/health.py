@@ -7,16 +7,13 @@ from loguru import logger
 
 from control_plane.database import get_db
 
-# Import from main.py - these will be available after main.py loads
-from control_plane.main import (
-    _now,
-    _check_database_health,
-    _check_signal_buffer_health,
-    POLICY,
-    health_service
-)
-
 router = APIRouter(tags=["health"])
+
+
+def _get_main():
+    """Lazy import of main module to avoid circular dependencies."""
+    import control_plane.main as main
+    return main
 
 
 @router.get("/healthz")
@@ -33,19 +30,21 @@ async def healthz(db: AsyncSession = Depends(get_db)):
         
     Use for: Docker HEALTHCHECK, Kubernetes liveness probes
     """
-    if health_service:
+    main = _get_main()
+    
+    if main.health_service:
         # Use health service for health checks
-        health_status = await health_service.check_health(db)
+        health_status = await main.health_service.check_health(db)
     else:
         # Fallback for tests
         health_status = {
             "status": "healthy",
-            "timestamp": _now().isoformat(),
+            "timestamp": main._now().isoformat(),
             "components": {}
         }
         
         # Check database connectivity
-        db_health = await _check_database_health(db)
+        db_health = await main._check_database_health(db)
         if db_health["status"] == "unhealthy":
             health_status["status"] = "degraded"
             health_status["components"]["database"] = "unhealthy"
@@ -53,7 +52,7 @@ async def healthz(db: AsyncSession = Depends(get_db)):
             health_status["components"]["database"] = "healthy"
         
         # Check signal buffer status
-        buffer_health = _check_signal_buffer_health()
+        buffer_health = main._check_signal_buffer_health()
         if buffer_health["status"] == "unhealthy":
             health_status["status"] = "degraded"
             health_status["components"]["signal_buffer"] = "unhealthy"
@@ -77,19 +76,21 @@ async def readyz(db: AsyncSession = Depends(get_db)):
     Returns 200 if service is ready to accept traffic, 503 otherwise.
     Checks critical dependencies like database connectivity.
     """
-    if health_service:
+    main = _get_main()
+    
+    if main.health_service:
         # Use health service for readiness checks
-        readiness_status = await health_service.check_readiness(db)
+        readiness_status = await main.health_service.check_readiness(db)
     else:
         # Fallback for tests
         readiness_status = {
             "ready": True,
-            "timestamp": _now().isoformat(),
+            "timestamp": main._now().isoformat(),
             "checks": {}
         }
         
         # Check database connectivity (critical for readiness)
-        db_health = await _check_database_health(db)
+        db_health = await main._check_database_health(db)
         if db_health["status"] == "unhealthy":
             readiness_status["checks"]["database"] = {
                 "status": "not_ready",
@@ -104,10 +105,10 @@ async def readyz(db: AsyncSession = Depends(get_db)):
         
         # Check if policy is initialized
         try:
-            if POLICY and POLICY.rules:
+            if main.POLICY and main.POLICY.rules:
                 readiness_status["checks"]["policy"] = {
                     "status": "ready",
-                    "message": f"Policy initialized with {len(POLICY.rules)} rules"
+                    "message": f"Policy initialized with {len(main.POLICY.rules)} rules"
                 }
             else:
                 readiness_status["checks"]["policy"] = {

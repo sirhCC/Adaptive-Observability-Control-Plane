@@ -5,21 +5,28 @@ from typing import Optional
 from datetime import datetime, timezone
 from loguru import logger
 
-from control_plane import constants, exporters, prom_metrics
+from control_plane import constants, exporters
+from control_plane import metrics as prom_metrics
 from control_plane.auth import get_optional_api_key
 
-# Import from main.py
-from control_plane.main import (
-    SignalIn, Signal, EffectiveConfig, limiter,
-    SIGNALS, _now, _prune, evaluate,
-    signal_service
-)
+
+def _get_main():
+    """Lazy import to avoid circular dependencies."""
+    import control_plane.main as main
+    return main
+
+
+# Get models for type annotations (FastAPI needs them at import time)
+def _get_models():
+    main = _get_main()
+    return main.SignalIn, main.EffectiveConfig
+
+SignalIn, EffectiveConfig = _get_models()
 
 router = APIRouter(tags=["signals"])
 
 
 @router.get("/signals/export")
-@limiter.limit(constants.RATE_LIMIT_EXPORT_SIGNALS)
 async def export_signals(
     request: Request,
     service: Optional[str] = None,
@@ -29,6 +36,7 @@ async def export_signals(
     limit: int = 1000
 ):
     """Export signals for offline analysis and archival."""
+    main = _get_main()
     limit = min(limit, 5000)
     
     start_dt = None
@@ -42,7 +50,7 @@ async def export_signals(
         end_dt = datetime.fromisoformat(end_time_fixed)
     
     exported_signals = exporters.filter_and_collect_signals(
-        signals_buffer=SIGNALS,
+        signals_buffer=main.SIGNALS,
         service=service,
         environment=environment,
         start_dt=start_dt,
@@ -59,27 +67,28 @@ async def export_signals(
             "end_time": end_time,
             "limit": limit
         },
-        export_time=_now()
+        export_time=main._now()
     )
 
 
 @router.post("/signal", response_model=EffectiveConfig)
-@limiter.limit("100/minute")
 async def ingest_signal(
     request: Request,
     sig: SignalIn,
     api_key: Optional[str] = Depends(get_optional_api_key),
 ):
     """Ingest telemetry signal and receive adaptive observability configuration."""
+    main = _get_main()
+    
     if api_key:
         logger.debug(f"Signal from authenticated service: {sig.service}")
     
-    signal_time = sig.timestamp if sig.timestamp is not None else _now()
+    signal_time = sig.timestamp if sig.timestamp is not None else main._now()
     
     if signal_time.tzinfo is None:
         signal_time = signal_time.replace(tzinfo=timezone.utc)
     
-    s = Signal(
+    s = main.Signal(
         service=sig.service,
         environment=sig.environment,
         ts=signal_time,
@@ -88,12 +97,12 @@ async def ingest_signal(
         attrs=sig.attrs,
     )
     
-    if signal_service:
-        signal_service.ingest_signal(s)
-        effective_config = evaluate(s.service, s.environment)
+    if main.signal_service:
+        main.signal_service.ingest_signal(s)
+        effective_config = main.evaluate(s.service, s.environment)
     else:
         key = (s.service, s.environment)
-        buf = SIGNALS.setdefault(key, [])
+        buf = main.SIGNALS.setdefault(key, [])
         buf.append(s)
         
         logger.debug(
@@ -113,8 +122,8 @@ async def ingest_signal(
             s.error or False
         )
         
-        _prune(key)
-        effective_config = evaluate(s.service, s.environment)
+        main._prune(key)
+        effective_config = main.evaluate(s.service, s.environment)
     
     logger.debug(
         "Configuration evaluated",

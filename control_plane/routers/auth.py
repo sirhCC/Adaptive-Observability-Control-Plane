@@ -8,11 +8,17 @@ import uuid
 router = APIRouter(tags=["auth"])
 
 
+def _get_main():
+    """Lazy import of main module to avoid circular dependencies."""
+    import control_plane.main as main
+    return main
+
+
 @router.post("/auth/generate-key")
-@Depends(require_admin_key)
 async def generate_key(
     request: Request,
-    description: str = "API key"
+    description: str = "API key",
+    admin: str = Depends(require_admin_key)
 ):
     """Generate a new API key (admin only).
     
@@ -22,7 +28,7 @@ async def generate_key(
     Returns:
         Generated API key and metadata
         
-    Rate limit: 5 requests per minute
+    Rate limit: 5 requests per minute (handled by decorator in main.py)
     Authentication: Admin key required
     """
     new_key = str(uuid.uuid4())
