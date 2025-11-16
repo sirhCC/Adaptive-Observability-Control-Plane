@@ -59,6 +59,7 @@ from control_plane.exceptions import (
 )
 from control_plane.feature_flags import init_feature_flags, get_feature_flag_service
 from control_plane.pattern_matching import matches_service_pattern, matches_environment_pattern, validate_pattern
+from control_plane.services import PolicyService, SignalService, ConfigService, HealthService
 
 # Note: Core logic extracted to separate modules for better organization:
 # - schemas.py: Pydantic models (265 lines)
@@ -122,6 +123,14 @@ async def lifespan(app: FastAPI):
     # Initialize feature flag service
     init_feature_flags(provider_type=FF_PROVIDER, cache_ttl=FF_CACHE_TTL)
     logger.info(f"Feature flag service initialized with {FF_PROVIDER} provider")
+    
+    # Initialize service layer with global state
+    global policy_service, signal_service, config_service, health_service
+    policy_service = PolicyService(POLICY, POLICY_HISTORY, MAX_POLICY_HISTORY)
+    signal_service = SignalService(SIGNALS, WINDOW_MAX)
+    config_service = ConfigService(POLICY, SIGNALS, evaluate)
+    health_service = HealthService(POLICY, SIGNALS)
+    logger.info("Service layer initialized")
     
     # Seed default policy if no policy exists
     async for db in get_db():
@@ -376,6 +385,14 @@ class PolicyVersion(BaseModel):
 # Store up to 100 historical policy versions
 POLICY_HISTORY: List[PolicyVersion] = []
 MAX_POLICY_HISTORY = 100
+
+# Initialize service layer instances (after global state is defined)
+# These services encapsulate business logic and can be tested independently
+# They are initialized in the lifespan startup phase
+policy_service: PolicyService = None  # type: ignore
+signal_service: SignalService = None  # type: ignore
+config_service: ConfigService = None  # type: ignore
+health_service: HealthService = None  # type: ignore
 
 
 # --- Helpers
