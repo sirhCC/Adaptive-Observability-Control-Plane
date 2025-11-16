@@ -1,3 +1,24 @@
+"""Adaptive Observability Control Plane - Main Application
+
+This is the main FastAPI application file that brings together all components:
+
+Module Organization:
+- schemas.py: Pydantic models for API validation (Policy, Rule, Signal, etc.)
+- engine.py: Rule evaluation logic and metric aggregation
+- storage.py: In-memory state management (signals buffer, policy history)
+- models.py: SQLAlchemy database models
+- repository.py: Database access layer
+- auth.py: Authentication and authorization
+- metrics.py: Prometheus metrics
+- exceptions.py: Custom exception handling
+- feature_flags.py: Feature flag integration
+- pattern_matching.py: Service/environment pattern matching (wildcards, globs, regex)
+- rule_validator.py: Policy rule conflict detection
+
+For better code organization, core logic has been extracted to separate modules,
+but this file maintains backward compatibility by re-exporting key components.
+"""
+
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Literal, Optional
 from enum import Enum
@@ -34,6 +55,12 @@ from control_plane.exceptions import (
 )
 from control_plane.feature_flags import init_feature_flags, get_feature_flag_service
 from control_plane.pattern_matching import matches_service_pattern, matches_environment_pattern, validate_pattern
+
+# Note: Core logic extracted to separate modules for better organization:
+# - schemas.py: Pydantic models (265 lines)
+# - engine.py: Rule evaluation engine (361 lines)  
+# - storage.py: State management (190 lines)
+# These modules provide reusable components while main.py maintains backward compatibility
 
 # Configuration
 MAX_SIGNALS_PER_SERVICE = 10000  # Max signals to keep per (service, env)
