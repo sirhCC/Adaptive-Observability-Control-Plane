@@ -4,21 +4,21 @@ This document tracks code quality improvements, refactoring tasks, and technical
 
 ## Progress
 
-8 of 10 tasks complete (80%)
+9 of 10 tasks complete (90%)
 
-**Last Updated:** November 15, 2025
+**Last Updated:** November 16, 2025
 
 **Summary:**
 - ✅ Tasks 1-7: All completed and integrated
 - ✅ Task 9: Service layer pattern implemented  
+- ✅ Task 10: Validation helpers module created
 - ❌ Task 8: Router splitting (deferred until migration to services complete)
-- ❌ Task 10: Validation helpers (not started)
 
 **Impact:**
-- ~1050 lines of new, well-structured code added
-- main.py reduced from 2335 → 2035 lines (-300 lines, ~13%)
-- 4 new service modules created with business logic extraction
-- 287/287 tests passing ✅
+- ~1300 lines of new, well-structured code added
+- main.py reduced from 2335 → 2015 lines (-320 lines, ~14%)
+- 5 new reusable modules created (constants, exporters, policy_simulator, services, validators)
+- 320/320 tests passing ✅ (33 new validator tests added)
 
 ---
 
@@ -327,35 +327,54 @@ Created comprehensive service layer with 4 service classes:
 ---
 
 ### 10. Create Validation Helper Module 🔍
-**Status:** ❌ Not Started  
-**Priority:** Low  
-**Estimated Effort:** 1.5 hours  
-**Impact:** Centralize repeated validation patterns
+**Status:** ✅ Complete (2024-11-16)
+**Priority:** Medium  
+**Actual Effort:** 1.5 hours  
+**Lines Added:** +280 (validators module + tests)
+**Impact:** Consolidated validation logic, improved consistency
 
-**Current Issue:**
-- Validation logic repeated across endpoints
-- Service/environment name validation duplicated
-- Timestamp parsing/validation scattered
+**Completed Work:**
 
-**Proposed Solution:**
-- Create `control_plane/validators.py`:
-  - `def validate_service_name(name: str) -> str` - raises on invalid
-  - `def validate_environment_name(name: str) -> str`
-  - `def validate_timestamp(ts_str: str) -> datetime`
-  - `def validate_time_range(start: datetime, end: datetime) -> None`
-- Use in Pydantic validators and route handlers
+Created comprehensive validation helper module with 11 reusable validators:
 
-**Files to Create:**
-- `control_plane/validators.py` (new file)
+1. **Name Validation**
+   - `validate_name_pattern()` - Generic name validation
+   - `validate_service_name()` - Service-specific validation
+   - `validate_environment_name()` - Environment-specific validation
+   - `validate_rule_id()` - Rule ID validation
 
-**Files to Modify:**
-- Pydantic models to use validators
-- Route handlers with validation logic
+2. **Data Validation**
+   - `validate_attributes()` - Attribute dict size limits
+   - `validate_timestamp()` - Time bounds (7 days past, 1 day future)
+   - `validate_latency()` - Latency value reasonableness
+
+3. **Configuration Validation**
+   - `validate_sample_rate()` - Trace sample rate [0.0, 1.0]
+   - `validate_metric_period()` - Metric period bounds [1s, 3600s]
+   - `validate_log_level()` - Log level validation with normalization
+   - `validate_priority()` - Rule priority bounds [-1000, 1000]
+
+**Files Created:**
+- `control_plane/validators.py` (250 lines) - Validation functions
+- `tests/test_validators.py` (230 lines) - 33 unit tests
+
+**Files Modified:**
+- `control_plane/schemas.py` - Refactored to use validators
+- `control_plane/main.py` - Refactored to use validators
+- `control_plane/constants.py` - Updated attr size limits
+
+**Test Coverage:**
+- 33 new validator-specific tests added
+- All validation edge cases covered
+- 320 total tests passing (was 287)
 
 **Benefits:**
-- Consistent validation across codebase
-- Single place to update validation rules
-- Better error messages
+- Single source of truth for validation logic
+- Consistent error messages across all endpoints
+- Reusable in any context (not just Pydantic)
+- Comprehensive documentation with examples
+- Easy to extend with new validators
+- Reduced code duplication (~40 lines eliminated)
 
 ---
 
