@@ -49,6 +49,7 @@ from control_plane.auth import require_admin_key, get_api_key, get_optional_api_
 from control_plane import metrics as prom_metrics
 from control_plane import constants
 from control_plane import exporters
+from control_plane.policy_simulator import PolicySimulator, create_simulation_response
 from control_plane.exceptions import (
     register_exception_handlers,
     PolicyValidationError,
@@ -1718,24 +1719,21 @@ async def simulate_policy(request: Request, req: SimulateRequest):
     Rate limit: 20 requests per minute
     Use for: CI/CD policy validation, policy development, impact analysis
     """
-    results = []
+    # Create simulator with evaluation functions
+    simulator = PolicySimulator(
+        calc_aggregates_fn=_calc_aggregates,
+        evaluate_rule_conditions_fn=_evaluate_rule_conditions,
+        match_rules_for_signal_fn=_match_rules_for_signal
+    )
     
-    for idx, sig_in in enumerate(req.test_signals):
-        # Convert SignalIn to Signal
-        test_signal = _convert_signal_in_to_signal(sig_in)
-        
-        # Create mock buffer with just this signal for aggregates
-        mock_buffer = [test_signal]
-        agg = _calc_aggregates(mock_buffer)
-        
-        # Evaluate which rules would match
-        matched_rules, effective_config = _match_rules_for_signal(req.policy, test_signal, agg)
-        
-        # Build result entry
-        result = _build_simulation_result(idx, test_signal, matched_rules, effective_config)
-        results.append(result)
+    # Convert input signals to Signal models
+    test_signals = [_convert_signal_in_to_signal(sig_in) for sig_in in req.test_signals]
     
-    return _build_simulation_summary(results, req.policy.id, len(req.test_signals))
+    # Evaluate signals against policy
+    results = simulator.evaluate_batch(req.policy, test_signals)
+    
+    # Build response
+    return create_simulation_response(results, req.policy.id, len(test_signals))
 
 
 @v1_router.get("/history/policy")
@@ -1910,82 +1908,39 @@ async def replay_signals(request: Request, req: ReplayRequest):
         else:
             policy_info["note"] = f"No policy history before {query_time.isoformat()}, using current policy"
     
-    # Replay each signal
-    results = []
+    # Create simulator with evaluation functions
+    simulator = PolicySimulator(
+        calc_aggregates_fn=_calc_aggregates,
+        evaluate_rule_conditions_fn=_evaluate_rule_conditions,
+        match_rules_for_signal_fn=_match_rules_for_signal
+    )
     
+    # Convert input signals to Signal models (preserving timestamps)
+    replay_signals = []
     for idx, sig_in in enumerate(req.signals):
-        # Convert SignalIn to Signal (use client-provided timestamp)
-        # We validated above that all signals have timestamps
         signal_time = sig_in.timestamp
         assert signal_time is not None, "Signal timestamp must not be None"
         
         if signal_time.tzinfo is None:
             signal_time = signal_time.replace(tzinfo=timezone.utc)
             
-        replay_signal = Signal(
+        replay_signals.append(Signal(
             service=sig_in.service,
             environment=sig_in.environment,
             ts=signal_time,
             latency_ms=sig_in.latency_ms,
             error=sig_in.error,
             attrs=sig_in.attrs,
-        )
-        
-        # Create mock buffer for aggregates (in real replay, could use historical data)
-        mock_buffer = [replay_signal]
-        agg = _calc_aggregates(mock_buffer)
-        
-        # Compute effective config using the selected policy
-        effective_config = EffectiveConfig(
-            service=replay_signal.service,
-            environment=replay_signal.environment
-        )
-        
-        matched_rules = []
-        
-        for rule in policy_to_use.rules:
-            if not rule.enabled:
-                continue
-                
-            # Check if rule scope matches with pattern support
-            if not matches_service_pattern(replay_signal.service, rule.service):
-                continue
-            if not matches_environment_pattern(replay_signal.environment, rule.environment):
-                continue
-            
-            # Evaluate conditions
-            match = True
-            for cond in rule.conditions:
-                if not _eval_condition(cond, replay_signal, agg):
-                    match = False
-                    break
-            
-            if match:
-                matched_rules.append({
-                    "rule_id": rule.id,
-                    "priority": rule.priority,
-                    "description": rule.description,
-                    "merge_strategy": rule.merge_strategy or policy_to_use.merge_strategy
-                })
-                
-                # Apply actions using merge strategy
-                strategy = rule.merge_strategy if rule.merge_strategy is not None else policy_to_use.merge_strategy
-                _apply_action_merge(effective_config, rule.actions, strategy)
-        
-        results.append({
-            "signal_index": idx,
-            "signal_timestamp": signal_time.isoformat(),
-            "service": replay_signal.service,
-            "environment": replay_signal.environment,
-            "matched_rules": matched_rules,
-            "effective_config": effective_config.model_dump()
-        })
+        ))
     
-    return {
-        "replay_results": results,
-        "total_signals": len(req.signals),
-        "policy_info": policy_info
-    }
+    # Replay signals against policy
+    policy_ts = datetime.fromisoformat(req.policy_timestamp.replace(' ', '+').replace('Z', '+00:00')) if req.policy_timestamp else None
+    replay_results = simulator.replay_with_historical_policy(replay_signals, policy_to_use, policy_ts)
+    
+    # Add policy info to results
+    replay_results["policy_info"] = policy_info
+    
+    return replay_results
 
 
 @v1_router.post("/compare")
@@ -2050,119 +2005,37 @@ async def compare_policies(request: Request, req: CompareRequest):
                     detail=f"No policy history available before {query_time.isoformat()}"
                 )
     
-    # Compare each signal across all policies
-    comparison_results = []
+    # Create simulator with evaluation functions
+    simulator = PolicySimulator(
+        calc_aggregates_fn=_calc_aggregates,
+        evaluate_rule_conditions_fn=_evaluate_rule_conditions,
+        match_rules_for_signal_fn=_match_rules_for_signal
+    )
     
-    for idx, sig_in in enumerate(req.signals):
-        # Convert SignalIn to Signal
+    # Convert input signals to Signal models
+    test_signals = []
+    for sig_in in req.signals:
         signal_time = sig_in.timestamp if sig_in.timestamp else _now()
         if signal_time.tzinfo is None:
             signal_time = signal_time.replace(tzinfo=timezone.utc)
             
-        test_signal = Signal(
+        test_signals.append(Signal(
             service=sig_in.service,
             environment=sig_in.environment,
             ts=signal_time,
             latency_ms=sig_in.latency_ms,
             error=sig_in.error,
             attrs=sig_in.attrs,
-        )
-        
-        # Create mock buffer for aggregates
-        mock_buffer = [test_signal]
-        agg = _calc_aggregates(mock_buffer)
-        
-        # Evaluate with each policy
-        policy_results = []
-        
-        for policy_info in policies_to_compare:
-            policy = policy_info["policy"]
-            
-            effective_config = EffectiveConfig(
-                service=test_signal.service,
-                environment=test_signal.environment
-            )
-            
-            matched_rules = []
-            
-            for rule in policy.rules:
-                if not rule.enabled:
-                    continue
-                    
-                # Check if rule scope matches with pattern support
-                if not matches_service_pattern(test_signal.service, rule.service):
-                    continue
-                if not matches_environment_pattern(test_signal.environment, rule.environment):
-                    continue
-                
-                # Evaluate conditions
-                match = True
-                for cond in rule.conditions:
-                    if not _eval_condition(cond, test_signal, agg):
-                        match = False
-                        break
-                
-                if match:
-                    matched_rules.append(rule.id)
-                    
-                    # Apply actions
-                    if rule.actions.log_level:
-                        effective_config.log_level = rule.actions.log_level
-                    if rule.actions.trace_sample_rate is not None:
-                        effective_config.trace_sample_rate = rule.actions.trace_sample_rate
-                    if rule.actions.metric_period_s is not None:
-                        effective_config.metric_period_s = rule.actions.metric_period_s
-            
-            policy_results.append({
-                "policy_label": policy_info["label"],
-                "policy_id": policy_info["policy_id"],
-                "applied_at": policy_info["applied_at"],
-                "matched_rules": matched_rules,
-                "effective_config": effective_config.model_dump()
-            })
-        
-        # Calculate differences
-        configs = [pr["effective_config"] for pr in policy_results]
-        differences = []
-        
-        # Compare each config with the first one
-        base_config = configs[0]
-        for i, config in enumerate(configs[1:], 1):
-            diff = {}
-            for key in ["log_level", "trace_sample_rate", "metric_period_s"]:
-                if base_config[key] != config[key]:
-                    diff[key] = {
-                        "from": base_config[key],
-                        "to": config[key]
-                    }
-            if diff:
-                differences.append({
-                    "from_policy": policy_results[0]["policy_label"],
-                    "to_policy": policy_results[i]["policy_label"],
-                    "changes": diff
-                })
-        
-        comparison_results.append({
-            "signal_index": idx,
-            "service": test_signal.service,
-            "environment": test_signal.environment,
-            "policy_results": policy_results,
-            "has_differences": len(differences) > 0,
-            "differences": differences
-        })
+        ))
     
-    # Summary statistics
-    signals_with_differences = sum(1 for r in comparison_results if r["has_differences"])
+    # Build policy list for simulator
+    policies_with_labels = [
+        (p["label"], p["policy"]) 
+        for p in policies_to_compare
+    ]
     
-    return {
-        "comparison_results": comparison_results,
-        "total_signals": len(req.signals),
-        "policies_compared": len(policies_to_compare),
-        "summary": {
-            "signals_with_differences": signals_with_differences,
-            "signals_without_differences": len(req.signals) - signals_with_differences
-        }
-    }
+    # Compare signals across policies
+    return simulator.compare_evaluations(policies_with_labels, test_signals)
 
 
 @v1_router.get("/signals/export")
