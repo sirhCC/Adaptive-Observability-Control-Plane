@@ -799,36 +799,42 @@ async def healthz(db: AsyncSession = Depends(get_db)):
         
     Use for: Docker HEALTHCHECK, Kubernetes liveness probes
     """
-    health_status = {
-        "status": "healthy",
-        "timestamp": _now().isoformat(),
-        "components": {}
-    }
+    from fastapi.responses import JSONResponse
     
-    # Check database connectivity
-    db_health = await _check_database_health(db)
-    if db_health["status"] == "unhealthy":
-        health_status["status"] = "degraded"
-        health_status["components"]["database"] = "unhealthy"
+    if health_service:
+        # Use health service for health checks
+        health_status = await health_service.check_health(db)
     else:
-        health_status["components"]["database"] = "healthy"
-    
-    # Check signal buffer status
-    buffer_health = _check_signal_buffer_health()
-    if buffer_health["status"] == "unhealthy":
-        health_status["status"] = "degraded"
-        health_status["components"]["signal_buffer"] = "unhealthy"
-    else:
-        health_status["components"]["signal_buffer"] = {
+        # Fallback for tests
+        health_status = {
             "status": "healthy",
-            "total_signals": buffer_health["total_signals"],
-            "services": buffer_health["services"]
+            "timestamp": _now().isoformat(),
+            "components": {}
         }
+        
+        # Check database connectivity
+        db_health = await _check_database_health(db)
+        if db_health["status"] == "unhealthy":
+            health_status["status"] = "degraded"
+            health_status["components"]["database"] = "unhealthy"
+        else:
+            health_status["components"]["database"] = "healthy"
+        
+        # Check signal buffer status
+        buffer_health = _check_signal_buffer_health()
+        if buffer_health["status"] == "unhealthy":
+            health_status["status"] = "degraded"
+            health_status["components"]["signal_buffer"] = "unhealthy"
+        else:
+            health_status["components"]["signal_buffer"] = {
+                "status": "healthy",
+                "total_signals": buffer_health["total_signals"],
+                "services": buffer_health["services"]
+            }
     
     # Set HTTP status code based on health
     status_code = 200 if health_status["status"] == "healthy" else 503
     
-    from fastapi.responses import JSONResponse
     return JSONResponse(content=health_status, status_code=status_code)
 
 
@@ -839,50 +845,56 @@ async def readyz(db: AsyncSession = Depends(get_db)):
     Returns 200 if service is ready to accept traffic, 503 otherwise.
     Checks critical dependencies like database connectivity.
     """
-    readiness_status = {
-        "ready": True,
-        "timestamp": _now().isoformat(),
-        "checks": {}
-    }
+    from fastapi.responses import JSONResponse
     
-    # Check database connectivity (critical for readiness)
-    db_health = await _check_database_health(db)
-    if db_health["status"] == "unhealthy":
-        readiness_status["checks"]["database"] = {
-            "status": "not_ready",
-            "message": f"Database connection failed: {db_health['error']}"
-        }
-        readiness_status["ready"] = False
+    if health_service:
+        # Use health service for readiness checks
+        readiness_status = await health_service.check_readiness(db)
     else:
-        readiness_status["checks"]["database"] = {
-            "status": "ready",
-            "message": "Database connection successful"
+        # Fallback for tests
+        readiness_status = {
+            "ready": True,
+            "timestamp": _now().isoformat(),
+            "checks": {}
         }
-    
-    # Check if policy is initialized
-    try:
-        if POLICY and POLICY.rules:
-            readiness_status["checks"]["policy"] = {
-                "status": "ready",
-                "message": f"Policy initialized with {len(POLICY.rules)} rules"
+        
+        # Check database connectivity (critical for readiness)
+        db_health = await _check_database_health(db)
+        if db_health["status"] == "unhealthy":
+            readiness_status["checks"]["database"] = {
+                "status": "not_ready",
+                "message": f"Database connection failed: {db_health['error']}"
             }
+            readiness_status["ready"] = False
         else:
-            readiness_status["checks"]["policy"] = {
+            readiness_status["checks"]["database"] = {
                 "status": "ready",
-                "message": "Default policy active"
+                "message": "Database connection successful"
             }
-    except Exception as e:
-        readiness_status["checks"]["policy"] = {
-            "status": "not_ready",
-            "message": f"Policy check failed: {str(e)}"
-        }
-        readiness_status["ready"] = False
-        logger.error(f"Policy readiness check failed: {e}")
+        
+        # Check if policy is initialized
+        try:
+            if POLICY and POLICY.rules:
+                readiness_status["checks"]["policy"] = {
+                    "status": "ready",
+                    "message": f"Policy initialized with {len(POLICY.rules)} rules"
+                }
+            else:
+                readiness_status["checks"]["policy"] = {
+                    "status": "ready",
+                    "message": "Default policy active"
+                }
+        except Exception as e:
+            readiness_status["checks"]["policy"] = {
+                "status": "not_ready",
+                "message": f"Policy check failed: {str(e)}"
+            }
+            readiness_status["ready"] = False
+            logger.error(f"Policy readiness check failed: {e}")
     
     # Set HTTP status code based on readiness
     status_code = 200 if readiness_status["ready"] else 503
     
-    from fastapi.responses import JSONResponse
     return JSONResponse(content=readiness_status, status_code=status_code)
 
 
@@ -945,6 +957,8 @@ async def get_policy(request: Request):
         
     Rate limit: 50 requests per minute
     """
+    if policy_service:
+        return policy_service.get_current_policy()
     return POLICY
 
 
@@ -1129,6 +1143,10 @@ async def get_policy_templates(request: Request):
     Rate limit: 50 requests per minute
     Use for: Quick start, best practices, policy inspiration
     """
+    if policy_service:
+        return policy_service.get_default_templates()
+    
+    # Fallback for tests
     templates = {
         "production-safe": {
             "name": "Production Safe",
@@ -1513,33 +1531,43 @@ async def set_policy(
             "message": "Policy is valid and can be applied"
         }
     
-    # Apply the policy
-    POLICY = req.policy
-    
-    # Save to policy history for time-travel debugging
-    global POLICY_HISTORY
-    version = PolicyVersion(
-        policy=req.policy.model_copy(deep=True),
-        applied_at=_now(),
-        applied_by=admin  # admin username from API key
-    )
-    POLICY_HISTORY.append(version)
-    
-    # Prune old policy history
-    if len(POLICY_HISTORY) > MAX_POLICY_HISTORY:
-        POLICY_HISTORY = POLICY_HISTORY[-MAX_POLICY_HISTORY:]
-    
-    prom_metrics.record_policy_update(req.policy.id)
-    logger.info(
-        f"Policy '{req.policy.id}' updated with {len(req.policy.rules)} rules by {admin}",
-        policy_id=req.policy.id,
-        num_rules=len(req.policy.rules),
-        merge_strategy=req.policy.merge_strategy,
-        admin=admin,
-        has_warnings=len(warnings) > 0
-    )
-    
-    return POLICY
+    # Apply the policy - use service if available, otherwise fallback to direct update
+    if policy_service:
+        try:
+            result = policy_service.update_policy(req.policy, updated_by=admin)
+            prom_metrics.record_policy_update(req.policy.id)
+            return policy_service.get_current_policy()
+        except Exception as e:
+            logger.error(f"Policy update via service failed: {e}")
+            raise
+    else:
+        # Fallback for test environment where services aren't initialized
+        POLICY = req.policy
+        
+        # Save to policy history for time-travel debugging
+        global POLICY_HISTORY
+        version = PolicyVersion(
+            policy=req.policy.model_copy(deep=True),
+            applied_at=_now(),
+            applied_by=admin
+        )
+        POLICY_HISTORY.append(version)
+        
+        # Prune old policy history
+        if len(POLICY_HISTORY) > MAX_POLICY_HISTORY:
+            POLICY_HISTORY = POLICY_HISTORY[-MAX_POLICY_HISTORY:]
+        
+        prom_metrics.record_policy_update(req.policy.id)
+        logger.info(
+            f"Policy '{req.policy.id}' updated with {len(req.policy.rules)} rules by {admin}",
+            policy_id=req.policy.id,
+            num_rules=len(req.policy.rules),
+            merge_strategy=req.policy.merge_strategy,
+            admin=admin,
+            has_warnings=len(warnings) > 0
+        )
+        
+        return POLICY
 
 
 class SignalIn(BaseModel):
@@ -2259,31 +2287,38 @@ async def ingest_signal(
         error=sig.error,
         attrs=sig.attrs,
     )
-    key = (s.service, s.environment)
-    buf = SIGNALS.setdefault(key, [])
-    buf.append(s)
     
-    # Log signal ingestion with context
-    logger.debug(
-        "Signal ingested",
-        service=s.service,
-        environment=s.environment,
-        latency_ms=s.latency_ms,
-        error=s.error,
-        buffer_size=len(buf),
-        has_timestamp=sig.timestamp is not None
-    )
-    
-    # Record signal metrics
-    prom_metrics.record_signal_metrics(
-        s.service,
-        s.environment,
-        s.latency_ms or 0.0,
-        s.error or False
-    )
-    
-    _prune(key)
-    effective_config = evaluate(s.service, s.environment)
+    if signal_service:
+        # Use signal service for ingestion
+        signal_service.ingest_signal(s)
+        effective_config = evaluate(s.service, s.environment)
+    else:
+        # Fallback for tests - direct implementation
+        key = (s.service, s.environment)
+        buf = SIGNALS.setdefault(key, [])
+        buf.append(s)
+        
+        # Log signal ingestion with context
+        logger.debug(
+            "Signal ingested",
+            service=s.service,
+            environment=s.environment,
+            latency_ms=s.latency_ms,
+            error=s.error,
+            buffer_size=len(buf),
+            has_timestamp=sig.timestamp is not None
+        )
+        
+        # Record signal metrics
+        prom_metrics.record_signal_metrics(
+            s.service,
+            s.environment,
+            s.latency_ms or 0.0,
+            s.error or False
+        )
+        
+        _prune(key)
+        effective_config = evaluate(s.service, s.environment)
     
     # Log evaluation result
     logger.debug(
@@ -2318,6 +2353,11 @@ async def get_config(request: Request, service: str, environment: str):
     Authentication: Optional
     Use by: Agents polling for config without sending telemetry
     """
+    if config_service:
+        # Use config service for validation and evaluation
+        return config_service.get_effective_config(service, environment)
+    
+    # Fallback for tests
     # Validate service and environment names
     if len(service) > MAX_SERVICE_NAME_LEN or len(environment) > MAX_ENV_NAME_LEN:
         raise HTTPException(status_code=400, detail="Service or environment name too long")
@@ -2328,6 +2368,12 @@ async def get_config(request: Request, service: str, environment: str):
         )
     return evaluate(service, environment)
 
+
+# TODO: Refactoring in progress - router modules created but not yet integrated
+# New router modules have been created in control_plane/routers/:
+# - health.py, auth.py, policy.py, signal.py, config.py, simulation.py
+# These will be integrated in a future phase to split this file
+# See MAIN_REFACTORING_PLAN.md for details
 
 # Include v1 API router (must be after all route definitions)
 app.include_router(v1_router)
