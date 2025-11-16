@@ -308,6 +308,7 @@ MAX_POLICY_HISTORY = 100
 # --- Helpers
 
 def _now() -> datetime:
+    """Get current UTC time with timezone awareness."""
     return datetime.now(timezone.utc)
 
 
@@ -426,7 +427,9 @@ def _calc_aggregates(buf: List[Signal], window_s: Optional[int] = None) -> Dict[
     }
 
 
-op_map = {
+# Comparison operators for condition evaluation
+from typing import Callable
+op_map: Dict[str, Callable[[float, float], bool]] = {
     ">": lambda a, b: a > b,
     ">=": lambda a, b: a >= b,
     "<": lambda a, b: a < b,
@@ -446,7 +449,16 @@ LOG_LEVEL_ORDER = {
 
 
 def _merge_log_level(current: str, new: Optional[str], strategy: MergeStrategy) -> str:
-    """Merge log level values according to strategy."""
+    """Merge log level values according to merge strategy.
+    
+    Args:
+        current: Current log level (ERROR, WARN, INFO, DEBUG)
+        new: New log level to merge (or None to skip)
+        strategy: Merge strategy (last_wins, strictest, additive, min, max)
+    
+    Returns:
+        Merged log level based on strategy
+    """
     if new is None:
         return current
     
@@ -566,6 +578,20 @@ def _eval_condition(cond: Condition, signal: Signal, aggs: dict) -> bool:
 # --- Rule evaluation
 
 def evaluate(service: str, env: str) -> EffectiveConfig:
+    """Evaluate policy rules for a service and environment.
+    
+    Args:
+        service: Service name
+        env: Environment name
+    
+    Returns:
+        EffectiveConfig with merged actions from all matching rules
+    
+    Note:
+        - Evaluates rules in priority order (highest first)
+        - Applies merge strategies for overlapping rules
+        - Records metrics for policy evaluations and rule matches
+    """
     start_time = time.time()
     key = (service, env)
     _prune(key)
@@ -630,7 +656,18 @@ class UpsertPolicy(BaseModel):
 
 @v1_router.get("/healthz")
 async def healthz(db: AsyncSession = Depends(get_db)):
-    """Health check endpoint with component status."""
+    """Health check endpoint with component status.
+    
+    Checks status of critical components:
+    - Database connectivity
+    - Signal buffer health
+    
+    Returns:
+        200: Service is healthy
+        503: Service is degraded (component failures)
+        
+    Use for: Docker HEALTHCHECK, Kubernetes liveness probes
+    """
     health_status = {
         "status": "healthy",
         "timestamp": _now().isoformat(),
@@ -727,7 +764,19 @@ async def readyz(db: AsyncSession = Depends(get_db)):
 
 @v1_router.get("/metrics")
 async def metrics():
-    """Prometheus metrics endpoint."""
+    """Prometheus metrics endpoint for monitoring.
+    
+    Exposes comprehensive metrics:
+    - HTTP request metrics (requests_total, request_duration_seconds)
+    - Signal metrics (signals_ingested_total, signal_latency_ms)
+    - Policy metrics (policy_evaluations_total, rule_matches_total)
+    - Database metrics (db_queries_total, db_query_duration_seconds)
+    
+    Returns:
+        Prometheus-formatted metrics in text/plain format
+        
+    Use with: Prometheus, Grafana, or any metrics scraper
+    """
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     from fastapi.responses import Response
     
@@ -741,7 +790,16 @@ async def generate_key(
     request: Request,
     admin: str = Depends(require_admin_key),
 ):
-    """Generate a new API key for agent authentication. Requires admin access."""
+    """Generate a new API key for agent authentication.
+    
+    Requires admin API key in X-API-Key header.
+    
+    Returns:
+        New API key with creation timestamp and security note.
+        
+    Rate limit: 5 requests per minute
+    Security: Admin access required
+    """
     from control_plane.auth import generate_api_key
     
     new_key = generate_api_key()
@@ -756,7 +814,13 @@ async def generate_key(
 @v1_router.get("/policy", response_model=Policy)
 @limiter.limit("50/minute")
 async def get_policy(request: Request):
-    """Get the current policy configuration."""
+    """Get the current active policy configuration.
+    
+    Returns:
+        Current policy with all rules and merge strategy settings.
+        
+    Rate limit: 50 requests per minute
+    """
     return POLICY
 
 
@@ -927,8 +991,18 @@ async def import_policy(
 async def get_policy_templates(request: Request):
     """Get policy templates/presets for common scenarios.
     
-    Returns pre-configured policy templates that can be used as starting points
-    for different observability strategies.
+    Returns pre-configured policy templates for different observability strategies:
+    - production-safe: Conservative production policy
+    - development: Verbose development environment
+    - performance-focused: Latency-based adaptive policy
+    - cost-optimized: Minimal overhead for cost savings
+    - balanced: General-purpose adaptive policy
+    
+    Returns:
+        Dictionary of available templates with descriptions
+        
+    Rate limit: 50 requests per minute
+    Use for: Quick start, best practices, policy inspiration
     """
     templates = {
         "production-safe": {
@@ -1145,12 +1219,21 @@ async def get_policy_templates(request: Request):
 async def get_policy_template(request: Request, template_name: str):
     """Get a specific policy template by name.
     
+    Available templates:
+    - production-safe: Conservative with error-based elevation
+    - development: Verbose logging with high sampling
+    - performance-focused: Latency-based elevation
+    - cost-optimized: Minimal overhead, critical-only elevation
+    - balanced: Error and latency triggers
+    
     Args:
-        template_name: One of: production-safe, development, performance-focused, 
-                       cost-optimized, balanced
+        template_name: Template identifier
     
     Returns:
-        Policy template configuration ready to import
+        Policy template with usage examples for import
+        
+    Rate limit: 50 requests per minute
+    Use for: Quick policy setup, best practices reference
     """
     # Get all templates
     templates_response = await get_policy_templates(request)
@@ -1178,7 +1261,20 @@ async def get_policy_template(request: Request, template_name: str):
 @v1_router.post("/policy/validate")
 @limiter.limit("20/minute")
 async def validate_policy(request: Request, req: UpsertPolicy):
-    """Validate a policy configuration without applying it."""
+    """Validate a policy configuration without applying it.
+    
+    Performs comprehensive validation:
+    - Pattern syntax validation (service/environment wildcards, globs, regex)
+    - Rule conflict detection
+    - Priority conflicts
+    - Overlapping conditions
+    
+    Returns:
+        Validation results with conflicts categorized by severity (error/warning/info).
+        
+    Rate limit: 20 requests per minute
+    Use for: CI/CD pipelines, GitOps validation, policy development
+    """
     from control_plane.rule_validator import validate_policy_rules
     
     # Validate service/environment patterns
@@ -1225,15 +1321,25 @@ async def set_policy(
     admin: str = Depends(require_admin_key),
     dry_run: bool = False,
 ):
-    """Update the policy configuration. Requires admin API key.
+    """Update the active policy configuration.
+    
+    Performs validation before applying:
+    - Rule conflict detection
+    - Priority validation
+    - Pattern syntax validation
+    
+    Saves policy to version history for time-travel debugging.
     
     Args:
-        dry_run: If True, validate the policy but don't apply it.
-            Returns validation results without applying changes.
+        req: Policy configuration to apply
+        dry_run: If True, validates without applying (simulation mode)
             
     Returns:
-        If dry_run is False: Policy object that was applied
-        If dry_run is True: Dict with validation results and policy preview
+        Applied policy (dry_run=False) or validation results (dry_run=True)
+        
+    Rate limit: 10 requests per minute (strict)
+    Security: Admin API key required
+    Audit: All changes logged with timestamp and admin identifier
     """
     from control_plane.rule_validator import validate_policy_rules
     
@@ -1397,8 +1503,19 @@ class CompareRequest(BaseModel):
 async def simulate_policy(request: Request, req: SimulateRequest):
     """Simulate policy evaluation with test signals.
     
-    Shows which rules would match for each test signal without applying the policy.
-    Useful for testing policy changes before deployment.
+    Dry-run mode for policy testing: evaluates which rules would match for
+    test signals without applying the policy. Shows matched rules, condition
+    evaluation details, and resulting effective configuration.
+    
+    Args:
+        policy: Policy to simulate
+        test_signals: 1-100 test signals to evaluate
+    
+    Returns:
+        Detailed simulation results with matched rules and effective configs
+        
+    Rate limit: 20 requests per minute
+    Use for: CI/CD policy validation, policy development, impact analysis
     """
     results = []
     
@@ -1498,16 +1615,21 @@ async def get_policy_history(
 ):
     """Get policy version history for time-travel debugging.
     
-    Query historical policy configurations to understand what policy was active
-    at a given time. Useful for debugging and auditing.
+    Query historical policy configurations with complete audit trail:
+    - What policy was active at any point in time
+    - Who applied each policy change
+    - When changes occurred
     
     Args:
         start_time: ISO 8601 timestamp to filter from (optional)
         end_time: ISO 8601 timestamp to filter to (optional)
-        limit: Maximum number of versions to return (default 50, max 100)
+        limit: Maximum versions to return (default 50, max 100)
     
     Returns:
-        List of policy versions with timestamps and who applied them
+        List of policy versions with timestamps and attribution
+        
+    Rate limit: 20 requests per minute
+    Use for: Debugging, auditing, compliance, incident analysis
     """
     # Limit the result count
     limit = min(limit, 100)
@@ -1548,14 +1670,18 @@ async def get_policy_at_time(
 ):
     """Get the policy that was active at a specific time.
     
-    Time-travel debugging: returns the policy configuration that would have been
-    active at the specified timestamp.
+    Time-travel query: returns the exact policy configuration that was
+    active at the specified timestamp. Essential for "what would have
+    happened" analysis and debugging past behavior.
     
     Args:
-        timestamp: ISO 8601 timestamp to query
+        timestamp: ISO 8601 timestamp to query (e.g., 2025-01-15T10:30:00Z)
     
     Returns:
-        The policy that was active at that time, or current policy if no history
+        Policy active at that time with application metadata
+        
+    Rate limit: 20 requests per minute
+    Use for: Incident investigation, behavioral analysis, policy impact assessment
     """
     # URL encoding may turn + into space, so handle both formats
     timestamp_fixed = timestamp.replace(' ', '+').replace('Z', '+00:00')
@@ -1590,21 +1716,27 @@ async def get_policy_at_time(
 @v1_router.post("/replay")
 @limiter.limit("20/minute")
 async def replay_signals(request: Request, req: ReplayRequest):
-    """Replay historical signals to see what configs would have been returned.
+    """Replay historical signals with time-travel policy evaluation.
     
-    Time-travel debugging: replay past signals with either the current policy
-    or the policy that was active at a specific time. Shows what configuration
-    would have been returned, enabling "what would have happened" analysis.
+    Re-evaluate past signals using either:
+    - Current policy (default) - see how current rules would handle past signals
+    - Historical policy - see what actually happened at that time
     
-    All signals must include timestamps. Use this to understand how policy
-    changes would affect past behavior.
+    Perfect for:
+    - Understanding policy change impacts
+    - Debugging past incidents
+    - Validating policy improvements
+    - "What would have happened if..." analysis
     
     Args:
-        signals: Historical signals to replay (must include timestamps)
-        policy_timestamp: If provided, uses policy active at this time. Otherwise uses current policy.
+        signals: Historical signals to replay (1-100, must include timestamps)
+        policy_timestamp: Optional ISO 8601 timestamp for historical policy
     
     Returns:
-        Replay results showing effective config for each signal
+        Replay results with matched rules and effective configs per signal
+        
+    Rate limit: 20 requests per minute
+    Use for: Incident analysis, policy validation, impact assessment
     """
     # Validate all signals have timestamps
     for idx, sig in enumerate(req.signals):
@@ -1728,16 +1860,25 @@ async def replay_signals(request: Request, req: ReplayRequest):
 async def compare_policies(request: Request, req: CompareRequest):
     """Compare how different policies would handle the same signals.
     
-    "What would have happened" analysis: shows how effective configs would differ
-    across multiple policy versions for the same signals. Useful for understanding
-    the impact of policy changes.
+    Side-by-side policy comparison showing behavioral differences:
+    - Which rules match in each policy
+    - How effective configurations differ
+    - Impact of policy changes on observability settings
+    
+    Supports comparing:
+    - Current policy vs historical policies
+    - Multiple historical policies
+    - Up to 5 policies simultaneously
     
     Args:
-        signals: Signals to analyze (can be historical or synthetic)
-        compare_policies: List of policy timestamps to compare, or 'current' for current policy
+        signals: Signals to analyze (1-50, historical or synthetic)
+        compare_policies: 2-5 policy timestamps or 'current'
     
     Returns:
-        Comparison showing effective configs and differences across policies
+        Detailed comparison with differences highlighted
+        
+    Rate limit: 20 requests per minute
+    Use for: Policy impact analysis, A/B testing, regression detection
     """
     # Resolve policies to compare
     policies_to_compare = []
@@ -1901,20 +2042,31 @@ async def export_signals(
     end_time: Optional[str] = None,
     limit: int = 1000
 ):
-    """Export signals for offline analysis.
+    """Export signals for offline analysis and archival.
     
-    Download signals from the buffer for offline analysis, debugging, or archival.
-    Supports filtering by service, environment, and time range.
+    Download signals from the in-memory buffer with flexible filtering:
+    - By service and/or environment
+    - By time range
+    - Sorted chronologically
+    
+    Exported signals include timestamps and are suitable for:
+    - Replay with /replay endpoint
+    - Offline analysis and visualization
+    - Long-term archival
+    - Incident investigation
     
     Args:
         service: Filter by service name (optional)
         environment: Filter by environment (optional)
         start_time: ISO 8601 timestamp to filter from (optional)
         end_time: ISO 8601 timestamp to filter to (optional)
-        limit: Maximum number of signals to export (default 1000, max 5000)
+        limit: Maximum signals to export (default 1000, max 5000)
     
     Returns:
-        Signals in JSON format suitable for replay or offline analysis
+        Signals in JSON format with timestamps for replay
+        
+    Rate limit: 20 requests per minute
+    Use for: Analysis, debugging, archival, compliance
     """
     # Limit the result count
     limit = min(limit, 5000)
@@ -1992,10 +2144,33 @@ async def ingest_signal(
     sig: SignalIn,
     api_key: Optional[str] = Depends(get_optional_api_key),
 ):
-    """Ingest telemetry signal and return effective configuration. API key recommended.
+    """Ingest telemetry signal and receive adaptive observability configuration.
     
-    Supports client-provided timestamps for replay/debugging scenarios.
-    If timestamp is not provided, server time is used.
+    Core endpoint for agent integration: agents send telemetry signals
+    (latency, errors, attributes) and receive dynamic configuration
+    based on current policy rules and signal history.
+    
+    Features:
+    - Evaluates policy rules against signal and historical aggregates
+    - Returns adaptive configuration (log level, sampling, metrics period)
+    - Stores signal for aggregation window (automatic pruning)
+    - Records metrics for monitoring
+    - Supports client-provided timestamps for replay/debugging
+    
+    Request body:
+        service: Service name (1-64 chars, alphanumeric/dash/underscore)
+        environment: Environment name (1-32 chars, alphanumeric/dash/underscore)
+        latency_ms: Request latency in milliseconds (optional, 0-1M)
+        error: Whether request was an error (optional, boolean)
+        attrs: Additional attributes (optional, max 50 key-value pairs)
+        timestamp: ISO 8601 timestamp (optional, for replay)
+    
+    Returns:
+        EffectiveConfig with log_level, trace_sample_rate, metric_period_s
+        
+    Rate limit: 100 requests per minute per IP
+    Authentication: API key recommended but optional
+    Use by: Observability agents polling for configuration
     """
     # Log API key usage for monitoring
     if api_key:
@@ -2035,7 +2210,23 @@ async def ingest_signal(
 @v1_router.get("/config/{service}/{environment}", response_model=EffectiveConfig)
 @limiter.limit("200/minute")  # 200 requests per minute per IP
 async def get_config(request: Request, service: str, environment: str):
-    """Get effective configuration for a service and environment."""
+    """Get effective observability configuration for a service and environment.
+    
+    Lightweight endpoint for configuration polling without sending signals.
+    Returns the current effective configuration based on policy rules
+    and historical signal data for this service/environment.
+    
+    Args:
+        service: Service name (1-64 chars, alphanumeric/dash/underscore)
+        environment: Environment name (1-32 chars, alphanumeric/dash/underscore)
+    
+    Returns:
+        EffectiveConfig with adaptive observability settings
+        
+    Rate limit: 200 requests per minute per IP (higher than /signal)
+    Authentication: Optional
+    Use by: Agents polling for config without sending telemetry
+    """
     # Validate service and environment names
     if len(service) > MAX_SERVICE_NAME_LEN or len(environment) > MAX_ENV_NAME_LEN:
         raise HTTPException(status_code=400, detail="Service or environment name too long")
