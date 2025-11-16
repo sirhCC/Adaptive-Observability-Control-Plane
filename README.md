@@ -54,7 +54,7 @@ A **production-ready** control plane for adaptive observability that dynamically
 - ✅ **Scalable architecture** - Database persistence, async operations, efficient aggregations
 - ✅ **Developer friendly** - OpenAPI docs, policy validation, simulation endpoints
 
-**Recent additions:** Feature flag support (LaunchDarkly, Split.io, custom HTTP), action merge strategies, signal replay with time-travel debugging, comprehensive policy validation, **flexible pattern matching** (wildcards, glob patterns, regex) for service/environment targeting, and **comprehensive code documentation** (type hints on critical functions, detailed docstrings on all 28 core functions and API endpoints with usage examples).
+**Recent additions:** Feature flag support (LaunchDarkly, Split.io, custom HTTP), action merge strategies, signal replay with time-travel debugging, comprehensive policy validation, **flexible pattern matching** (wildcards, glob patterns, regex) for service/environment targeting, **comprehensive code documentation** (type hints, detailed docstrings on all 28 functions/endpoints), and **modular architecture** (extracted 816 lines into focused modules for maintainability).
 
 ---
 
@@ -159,13 +159,18 @@ pytest --cov=control_plane --cov-report=html
 ```
 Adaptive-Observability-Control-Plane/
 ├── control_plane/
-│   ├── main.py              # FastAPI application & rule engine
+│   ├── main.py              # FastAPI application & API routes (2,243 lines)
+│   ├── schemas.py           # Pydantic models for API validation (265 lines)
+│   ├── engine.py            # Rule evaluation engine & aggregations (361 lines)
+│   ├── storage.py           # In-memory state & buffer management (190 lines)
 │   ├── models.py            # SQLAlchemy database models
 │   ├── database.py          # Database connection & session management
 │   ├── repository.py        # Data access layer
 │   ├── auth.py              # Authentication & authorization
 │   ├── exceptions.py        # Custom exception classes and handlers
 │   ├── metrics.py           # Prometheus metrics
+│   ├── pattern_matching.py  # Service/environment pattern matching
+│   ├── feature_flags.py     # Feature flag integration
 │   └── rule_validator.py    # Rule conflict detection
 ├── agent_demo/
 │   ├── run_demo.py          # Demo agent simulating a service
@@ -180,7 +185,8 @@ Adaptive-Observability-Control-Plane/
 │   ├── test_metrics.py              # 11 Prometheus metrics tests
 │   ├── test_rule_validation.py      # 17 conflict detection tests
 │   ├── test_error_handling.py       # 18 error handling tests
-│   └── test_pattern_matching.py     # 24 pattern matching tests
+│   ├── test_pattern_matching.py     # 24 pattern matching tests
+│   └── test_feature_flags.py        # 16 feature flag tests
 ├── alembic/
 │   ├── versions/            # Database migrations
 │   └── env.py               # Alembic configuration
